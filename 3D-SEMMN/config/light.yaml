@@ -1,0 +1,17 @@
+seed: 42
+grid:
+  dims: [100, 100, 10]
+  n_columns_xy: [10, 10]
+
+model:
+  recurrent_steps: 4
+  state_dim: 24
+
+connectivity:
+  inter_density: 0.10
+
+training:
+  batch_size: 128
+  epochs: 10
+  num_workers: 2
+  log_interval: 20

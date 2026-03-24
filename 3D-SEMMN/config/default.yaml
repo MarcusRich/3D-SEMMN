@@ -1,0 +1,51 @@
+seed: 42
+grid:
+  dims: [100, 100, 50]
+  n_columns_xy: [10, 10]
+  vision_y_ratio: 0.30
+  audio_y_ratio: 0.70
+  hub_y_range: [0.40, 0.60]
+  hub_z_range: [0.30, 0.70]
+
+model:
+  state_dim: 32
+  latent_dim: 8
+  vision_feature_dim: 256
+  audio_feature_dim: 256
+  recurrent_steps: 6
+  attention_heads: 4
+
+connectivity:
+  lambda_decay: 5.0
+  inter_density: 0.08
+  intra_density_boost: 2.0
+  min_weight: 0.0
+  max_weight: 1.5
+  init_weight_scale: 0.15
+  stdp_interval: 100
+  stdp_lr: 0.01
+  anti_hebbian: 0.05
+
+loss:
+  contrastive_weight: 1.0
+  reconstruction_weight: 0.5
+  imagination_weight: 0.3
+  manifold_weight: 0.1
+  spatial_penalty_weight: 0.0005
+  temperature: 0.1
+  use_spatial_penalty: true
+  use_manifold_loss: true
+
+training:
+  dataset_source: synthetic
+  batch_size: 64
+  epochs: 10
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 4
+  log_interval: 50
+  val_batches: 100
+  amp: true
+
+paths:
+  output_dir: outputs

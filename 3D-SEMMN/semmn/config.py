@@ -1,0 +1,121 @@
+"""Configuration handling for 3D-SEMMN."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+@dataclass
+class GridConfig:
+    dims: tuple[int, int, int] = (100, 100, 50)
+    n_columns_xy: tuple[int, int] = (10, 10)
+    vision_y_ratio: float = 0.30
+    audio_y_ratio: float = 0.70
+    hub_y_range: tuple[float, float] = (0.40, 0.60)
+    hub_z_range: tuple[float, float] = (0.30, 0.70)
+
+
+@dataclass
+class ModelConfig:
+    state_dim: int = 32
+    latent_dim: int = 8
+    vision_feature_dim: int = 256
+    audio_feature_dim: int = 256
+    recurrent_steps: int = 6
+    attention_heads: int = 4
+
+
+@dataclass
+class ConnectivityConfig:
+    lambda_decay: float = 5.0
+    inter_density: float = 0.08
+    intra_density_boost: float = 2.0
+    min_weight: float = 0.0
+    max_weight: float = 1.5
+    init_weight_scale: float = 0.15
+    stdp_interval: int = 100
+    stdp_lr: float = 0.01
+    anti_hebbian: float = 0.05
+
+
+@dataclass
+class LossConfig:
+    contrastive_weight: float = 1.0
+    reconstruction_weight: float = 0.5
+    imagination_weight: float = 0.3
+    manifold_weight: float = 0.1
+    spatial_penalty_weight: float = 5e-4
+    temperature: float = 0.1
+    use_spatial_penalty: bool = True
+    use_manifold_loss: bool = True
+
+
+@dataclass
+class TrainingConfig:
+    dataset_source: str = "synthetic"
+    batch_size: int = 64
+    epochs: int = 10
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    num_workers: int = 4
+    log_interval: int = 50
+    val_batches: int = 100
+    amp: bool = True
+
+
+@dataclass
+class PathsConfig:
+    output_dir: str = "outputs"
+
+
+@dataclass
+class SEMMNConfig:
+    seed: int = 42
+    grid: GridConfig = field(default_factory=GridConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
+    loss: LossConfig = field(default_factory=LossConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    paths: PathsConfig = field(default_factory=PathsConfig)
+
+    @property
+    def n_columns(self) -> int:
+        return self.grid.n_columns_xy[0] * self.grid.n_columns_xy[1]
+
+    @property
+    def n_neurons(self) -> int:
+        return self.grid.dims[0] * self.grid.dims[1] * self.grid.dims[2]
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "SEMMNConfig":
+        with Path(path).open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "SEMMNConfig":
+        return cls(
+            seed=raw.get("seed", 42),
+            grid=_merge_dataclass(GridConfig(), raw.get("grid", {})),
+            model=_merge_dataclass(ModelConfig(), raw.get("model", {})),
+            connectivity=_merge_dataclass(
+                ConnectivityConfig(), raw.get("connectivity", {})
+            ),
+            loss=_merge_dataclass(LossConfig(), raw.get("loss", {})),
+            training=_merge_dataclass(TrainingConfig(), raw.get("training", {})),
+            paths=_merge_dataclass(PathsConfig(), raw.get("paths", {})),
+        )
+
+
+def _merge_dataclass(default_obj: Any, overrides: dict[str, Any]) -> Any:
+    current = default_obj.__dict__.copy()
+    for key, value in overrides.items():
+        if isinstance(current.get(key), tuple) and isinstance(value, list):
+            current[key] = tuple(value)
+        else:
+            current[key] = value
+    return type(default_obj)(**current)
