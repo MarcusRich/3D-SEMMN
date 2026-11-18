@@ -8,4 +8,5 @@ Modules:
 - ``trf``: ridge temporal response functions fitted from per-run sufficient statistics,
   with leave-subjects-out cross-validation.
 - ``decode``: rank candidate script segments by predicted-vs-observed response correlation.
+- ``n400``: epoch/window amplitudes, per-subject slopes and the subject-level N400 statistic.
 """

@@ -416,9 +416,25 @@ def _paired(a: np.ndarray, b: np.ndarray) -> str:
     return f"{d.mean():+.4f} | {int((d > 0).sum())}/{len(d)} | {dz:+.2f} | {p}"
 
 
+def _ci(d: np.ndarray) -> str:
+    """Mean and 95% t confidence interval."""
+    d = np.asarray(d, dtype=float)
+    if len(d) < 2:
+        return "n/a"
+    half = sstats.t.ppf(0.975, len(d) - 1) * d.std(ddof=1) / np.sqrt(len(d))
+    return f"{d.mean():+.4f} [{d.mean() - half:+.4f}, {d.mean() + half:+.4f}]"
+
+
+def _per_subject(rows: list[dict], key: str, **match: str) -> dict[int, float]:
+    return {int(r["subject"]): float(r[key]) for r in rows if all(r[k] == v for k, v in match.items())}
+
+
 def summarize(out: Path) -> None:
     """Write summary.md from the per-subject tables in ``out``."""
-    lines = ["# P3 summary tables (held-out subjects, held-out runs)", ""]
+    lines = ["# P3 summary tables (held-out subjects, held-out runs)", "",
+             "Tier L is word timing plus word features (it keeps the onset regressor), not semantics alone.", ""]
+    gains: dict[str, dict[str, np.ndarray]] = {}
+    kernels: dict[str, list[dict]] = {}
     for cond in CONDITIONS:
         enc_path = out / f"encoding_per_subject_{cond}.csv"
         if not enc_path.exists():
@@ -448,11 +464,13 @@ def summarize(out: Path) -> None:
             for m in monts:
                 lines.append(f"| {m} | " + _paired(vals("C_env_onset_lm", m), vals("B_env_onset", m)) + " |")
             lines.append("")
+            gains[cond] = {m: vals("C_env_onset_lm", m) - vals("B_env_onset", m) for m in monts}
         n4_path = out / f"n400_trf_per_subject_{cond}.csv"
         if n4_path.exists():
             from semmn.eeg import n400
 
             n4 = _read_csv(n4_path)
+            kernels[cond] = n4
             lines += [f"### {cond}: N400 check, word-feature TRF kernel at 300-500 ms, centro-parietal region", "",
                       "| feature | montage | ROI channels | mean kernel | subjects negative | dz | t | p |",
                       "| --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -466,10 +484,14 @@ def summarize(out: Path) -> None:
         dec_path = out / f"decoding_per_subject_{cond}.csv"
         if dec_path.exists():
             dec = _read_csv(dec_path)
-            lines += [f"## {cond}: segment identification (pooled over subjects)", "",
+            lines += [f"## {cond}: segment identification", "",
+                      "Top-1 and top-10 are pooled over subjects. The binomial p treats every window as "
+                      "independent, but all subjects share one candidate set and one set of predictions, so it "
+                      "overstates the evidence; the subject-level columns (per-subject top-10 against chance, "
+                      "one-sample t) are the conservative test.", "",
                       "| window s | montage | tier | N candidates | top-1 | chance | top-10 | chance | "
-                      "binomial p (top-1) | null top-1 |",
-                      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+                      "binomial p (top-1) | subjects top-10 > chance | subject-level p (top-10) | null top-1 |",
+                      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
             for win in dict.fromkeys(r["window_s"] for r in dec):
                 for m in monts:
                     for t in tiers:
@@ -482,11 +504,44 @@ def summarize(out: Path) -> None:
                         trials = int(nc.sum())
                         ncand = int(nc[0])
                         null1 = np.mean([float(r["null_top1"]) for r in rows])
+                        chance10 = min(10 / ncand, 1)
+                        acc10 = np.array([float(r["top10"]) for r in rows])
+                        p_subj = (sstats.ttest_1samp(acc10, chance10, alternative="greater").pvalue
+                                  if len(acc10) > 1 and acc10.std() > 0 else float("nan"))
                         lines.append(
                             f"| {float(win):g} | {m} | {t} | {ncand} | {hits1 / trials:.3f} | {1 / ncand:.3f} | "
-                            f"{hits10 / trials:.3f} | {min(10 / ncand, 1):.3f} | "
-                            f"{decode.binom_p(hits1, trials, 1 / ncand):.2g} | {null1:.3f} |")
+                            f"{hits10 / trials:.3f} | {chance10:.3f} | "
+                            f"{decode.binom_p(hits1, trials, 1 / ncand):.2g} | {int((acc10 > chance10).sum())}/{len(rows)} | "
+                            f"{p_subj:.2g} | {null1:.3f} |")
             lines.append("")
+            lines += [f"### {cond}: each montage against 128 channels (paired over subjects, mean [95% CI])", "",
+                      "Negative means the montage loses against 128 channels.", "",
+                      "| montage | word-feature gain (C−B) difference | tier C 10 s top-10 difference |",
+                      "| --- | --- | --- |"]
+            ref10 = _per_subject(dec, "top10", window_s="10.0", montage="biosemi128", tier="C_env_onset_lm")
+            for m in monts:
+                if m == "biosemi128" or cond not in gains:
+                    continue
+                m10 = _per_subject(dec, "top10", window_s="10.0", montage=m, tier="C_env_onset_lm")
+                d10 = np.array([m10[k] - ref10[k] for k in sorted(ref10)])
+                lines.append(f"| {m} | {_ci(gains[cond][m] - gains[cond]['biosemi128'])} | {_ci(d10)} |")
+            lines.append("")
+    if len(gains) == 2:
+        lines += ["## Forward against reversed speech (Welch t-test on per-subject values)", "",
+                  "| measure | montage | forward mean | reverse mean | t | p |", "| --- | --- | --- | --- | --- | --- |"]
+        for m in gains["forward"]:
+            f, r = gains["forward"][m], gains["reverse"][m]
+            w = sstats.ttest_ind(f, r, equal_var=False)
+            lines.append(f"| word-feature gain C−B | {m} | {f.mean():+.4f} | {r.mean():+.4f} | {w.statistic:+.2f} | {w.pvalue:.2g} |")
+        if len(kernels) == 2:
+            for feat in dict.fromkeys(x["feature"] for x in kernels["forward"]):
+                for m in dict.fromkeys(x["montage"] for x in kernels["forward"]):
+                    f, r = (np.array([float(x["kernel_300_500ms"]) for x in kernels[c]
+                                      if x["feature"] == feat and x["montage"] == m]) for c in ("forward", "reverse"))
+                    w = sstats.ttest_ind(f, r, equal_var=False)
+                    lines.append(f"| N400 kernel, {feat} | {m} | {f.mean():+.4f} | {r.mean():+.4f} | "
+                                 f"{w.statistic:+.2f} | {w.pvalue:.2g} |")
+        lines.append("")
     (out / "summary.md").write_text("\n".join(lines))
     log(f"wrote {out.name}/summary.md")
 
