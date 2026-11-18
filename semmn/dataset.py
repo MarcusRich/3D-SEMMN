@@ -183,6 +183,8 @@ def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader, Data
             ds,
             batch_size=config.training.batch_size,
             shuffle=shuffle,
+            # The hub read-out uses BatchNorm, which cannot train on a batch of one.
+            drop_last=shuffle,
             num_workers=workers,
             pin_memory=torch.cuda.is_available(),
         )

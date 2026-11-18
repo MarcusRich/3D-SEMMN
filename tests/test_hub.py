@@ -11,6 +11,7 @@ HUB_COLUMNS = torch.tensor([1, 2])
 
 
 def _hub(**kwargs) -> SharedManifoldHub:
+    kwargs.setdefault("num_hub_columns", HUB_COLUMNS.numel())
     return SharedManifoldHub(STATE_DIM, LATENT_DIM, FEATURE_DIM, attention_heads=2, **kwargs).eval()
 
 
@@ -24,10 +25,10 @@ def test_fused_latent_is_the_hub_latent_by_default() -> None:
     assert torch.allclose(out["fused_latent"], out["hub_latent"])
 
 
-def test_features_cannot_reach_fused_latent_around_the_hub_attention() -> None:
+def test_features_cannot_reach_fused_latent_around_the_hub_readout() -> None:
     hub = _hub()
     with torch.no_grad():
-        hub.attn.out_proj.weight.zero_()  # cut the attention read-out
+        hub.readout.weight.zero_()  # cut the read-out of the hub columns
     states, vision, audio = _inputs()
     a = hub(states, HUB_COLUMNS, vision, audio)["fused_latent"]
     b = hub(states, HUB_COLUMNS, vision * 3.0 + 1.0, audio * 3.0 + 1.0)["fused_latent"]
@@ -47,7 +48,7 @@ def test_fused_latent_depends_on_hub_column_states() -> None:
 def test_direct_fusion_flag_restores_the_legacy_bypass() -> None:
     hub = _hub(direct_fusion=True)
     with torch.no_grad():
-        hub.attn.out_proj.weight.zero_()
+        hub.readout.weight.zero_()
     states, vision, audio = _inputs()
     a = hub(states, HUB_COLUMNS, vision, audio)["fused_latent"]
     b = hub(states, HUB_COLUMNS, vision * 3.0 + 1.0, audio * 3.0 + 1.0)["fused_latent"]
