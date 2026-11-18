@@ -13,9 +13,13 @@ class SharedManifoldHub(nn.Module):
         latent_dim: int,
         feature_dim: int,
         attention_heads: int = 4,
+        direct_fusion: bool = False,
     ) -> None:
         super().__init__()
         self.state_dim = state_dim
+        # When True, encoder features are also added straight into the fused latent,
+        # skipping the column grid. Off by default; kept only to reproduce old runs.
+        self.direct_fusion = direct_fusion
         self.modality_proj = nn.Linear(feature_dim, state_dim)
         self.attn = nn.MultiheadAttention(
             embed_dim=state_dim, num_heads=attention_heads, batch_first=True
@@ -66,14 +70,17 @@ class SharedManifoldHub(nn.Module):
         pooled = attn_out.mean(dim=1)
         hub_latent = self.hub_to_latent(pooled)
 
-        # Reliability-weighted fusion of modality latents.
         rel_logits = self.reliability(torch.cat([vision_features, audio_features], dim=-1))
         rel_weights = torch.softmax(rel_logits, dim=-1)
-        fused_latent = (
-            rel_weights[:, 0:1] * self.hub_to_latent(self.modality_proj(vision_features))
-            + rel_weights[:, 1:2] * self.hub_to_latent(self.modality_proj(audio_features))
-            + hub_latent
-        ) / 2.0
+        if self.direct_fusion:
+            # Legacy bypass: reliability-weighted modality latents added directly.
+            fused_latent = (
+                rel_weights[:, 0:1] * self.hub_to_latent(self.modality_proj(vision_features))
+                + rel_weights[:, 1:2] * self.hub_to_latent(self.modality_proj(audio_features))
+                + hub_latent
+            ) / 2.0
+        else:
+            fused_latent = hub_latent
 
         audio_from_vision = self.audio_imagination_decoder(fused_latent)
         vision_from_audio = self.vision_imagination_decoder(fused_latent)
