@@ -120,5 +120,9 @@ the best validation accuracy, then scores that checkpoint on the test split
 
 - Start with `config/light.yaml` to confirm setup and debug quickly.
 - Increase `training.batch_size` and `model.recurrent_steps` gradually.
-- STDP runs every `connectivity.stdp_interval` optimizer steps; check that a run is long enough for it to fire.
+- STDP runs every `connectivity.stdp_interval` optimizer steps (0 turns it off); check that a run is long enough for it to fire.
+  At the `eval-small.yaml` scale it is negligible: over a run it changes each edge by about 1% of its weight, about 6% of
+  what the optimizer moves it, and turning it off leaves val accuracy within the seed-to-seed spread. Each update is
+  `stdp_lr` (0.01) times a Hebbian term built from batch-mean column activities, which are small, minus a weight decay;
+  the mean |dw| per update is about 1e-4. It is kept for experiments, not claimed as a contributor.
 - Use mixed precision (`training.amp: true`) on CUDA devices.
