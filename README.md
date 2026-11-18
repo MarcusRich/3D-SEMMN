@@ -75,6 +75,29 @@ python -m pytest
 python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-small/
 ```
 
+## EEG response surface (P3)
+
+`semmn/eeg/` fits ridge temporal response functions that predict 128-channel EEG
+from a story's envelope, word onsets and word features. It evaluates them on held-out
+subjects and runs, and simulates 8- and 16-channel starter headsets by subsetting the
+cap. The data is Broderick et al. (2018), Dryad doi:10.5061/dryad.070jc (CC0); it is
+never copied into the repo. `eeg_p3.py` caches preprocessed arrays next to the data
+and writes only summary tables to `outputs/eeg/` (`summary.md` first).
+
+```bash
+export SEMMN_BRODERICK=/path/to/broderick2018/extracted   # holds "Natural Speech", ...
+python -I eeg_p3.py prep --condition forward --subjects 1-19
+python -I eeg_p3.py prep --condition reverse --subjects 1-10
+python -I eeg_p3.py words --backend local    # n-gram surprisal + static word vectors
+python -I eeg_p3.py encode --condition forward --subjects 1-19 --folds 5 --lm "$SEMMN_BRODERICK/cache/lm_local.npz"
+python -I eeg_p3.py encode --condition reverse --subjects 1-10 --folds 5 --lm "$SEMMN_BRODERICK/cache/lm_local.npz"
+python -I eeg_p3.py summarize
+```
+
+`words --backend local` reads the static embedding table of a locally cached
+all-MiniLM-L6-v2 from the Hugging Face cache. `--backend gpt2` needs `transformers`.
+The release lists content words only, so neither backend sees the full transcript.
+
 ## Config Notes
 
 - `config/default.yaml`: full spatial grid (`100x100x50`)
