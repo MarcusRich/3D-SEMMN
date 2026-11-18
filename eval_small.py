@@ -130,12 +130,29 @@ def semmn_accuracy(model: SEMMNModel, split: Split, batch_size: int) -> float:
 
 
 @torch.no_grad()
-def hub_state_std(model: SEMMNModel, split: Split, batch_size: int) -> float:
-    """Std of hub-column states across samples: ~0 means the hub sees no input."""
+def hub_diagnostics(model: SEMMNModel, split: Split, batch_size: int) -> dict[str, float]:
+    """How much the hub varies across samples, in absolute terms and against the input lobes.
+
+    `hub_state_std` near 0 means the hub columns see no input; `hub_to_lobe_std` puts it
+    on the scale of the vision and audio columns, which receive the input directly.
+    `hub_latent_std` is the spread of the hub's output latent.
+    """
     model.eval()
-    hub = model.grid.hub_columns
-    states = [model(v, a)["column_states"][:, hub, :] for v, a, _ in _batches(split, batch_size)]
-    return torch.cat(states).std(dim=0).mean().item()
+    grid = model.grid
+    lobes = torch.cat([grid.vision_columns, grid.audio_columns])
+    hub, lobe, latent = [], [], []
+    for v, a, _ in _batches(split, batch_size):
+        out = model(v, a)
+        hub.append(out["column_states"][:, grid.hub_columns, :])
+        lobe.append(out["column_states"][:, lobes, :])
+        latent.append(out["hub_latent"])
+    hub_std = torch.cat(hub).std(dim=0).mean().item()
+    lobe_std = torch.cat(lobe).std(dim=0).mean().item()
+    return {
+        "hub_state_std": hub_std,
+        "hub_to_lobe_std": hub_std / max(lobe_std, 1e-12),
+        "hub_latent_std": torch.cat(latent).std(dim=0).mean().item(),
+    }
 
 
 def _train_with_val_selection(
@@ -167,6 +184,7 @@ def train_semmn(
     shuffle = torch.Generator().manual_seed(seed)
     bs = cfg.training.batch_size
     step = 0
+    stdp_deltas: list[float] = []
 
     def train_epoch(_: int) -> None:
         nonlocal step
@@ -177,8 +195,9 @@ def train_semmn(
             compute_losses(outputs, label, cfg, model.connectivity)["total"].backward()
             optimizer.step()
             step += 1
-            if step % cfg.connectivity.stdp_interval == 0:  # same schedule as train.py
-                model.apply_stdp(outputs["pre_activity"], outputs["post_activity"])
+            if step % cfg.connectivity.stdp_interval == 0 and cfg.connectivity.enabled:
+                # Same schedule as train.py. Skipped when lesioned (it would be a no-op).
+                stdp_deltas.append(model.apply_stdp(outputs["pre_activity"], outputs["post_activity"]))
 
     model, best_epoch, best_val = _train_with_val_selection(
         model, cfg.training.epochs, train_epoch, lambda: semmn_accuracy(model, splits["val"], bs)
@@ -188,7 +207,8 @@ def train_semmn(
         "val_accuracy": best_val,
         "edges": int(model.connectivity.row_idx.numel()),
         "nonzero_edges": model.active_parameters(),
-        "stdp_updates": step // cfg.connectivity.stdp_interval,
+        "stdp_updates": len(stdp_deltas),
+        "stdp_mean_abs_dw": float(np.mean(stdp_deltas)) if stdp_deltas else 0.0,
     }
     return model, info
 
@@ -256,7 +276,7 @@ def run(config_path: str, output_dir: str | None = None) -> list[dict[str, Any]]
 
     for seed in eval_cfg["seeds"]:
         model, info = train_semmn(cfg, splits, seed, connectivity=True)
-        info["hub_state_std"] = hub_state_std(model, splits["test"], bs)
+        info.update(hub_diagnostics(model, splits["val"], bs))
         record("semmn", seed, semmn_accuracy(model, splits["test"], bs), **info)
         model.connectivity.enabled = False
         record("semmn_lesion_test", seed, semmn_accuracy(model, splits["test"], bs))
@@ -320,14 +340,16 @@ def write_outputs(
     if semmn_rows:
         lines += [
             "",
-            "Per-seed SEMMN diagnostics (sampled inter-column edges, non-zero edges, "
-            "hub-column state std across test samples, STDP updates applied):",
+            "Per-seed SEMMN diagnostics on the val split: sampled inter-column edges, non-zero "
+            "edges after training, hub-column state std across samples (absolute and relative "
+            "to the input lobes), hub latent std, STDP updates applied and their mean |dw|:",
             "",
-            "| seed | edges | non-zero edges | hub state std | STDP updates |",
-            "| --- | --- | --- | --- | --- |",
+            "| seed | best epoch | edges | non-zero edges | hub state std | hub/lobe std | hub latent std | STDP updates | STDP mean abs dw |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         lines += [
-            f"| {r['seed']} | {r['edges']} | {r['nonzero_edges']} | {r['hub_state_std']:.2e} | {r['stdp_updates']} |"
+            f"| {r['seed']} | {r['best_epoch']} | {r['edges']} | {r['nonzero_edges']} | {r['hub_state_std']:.2e} "
+            f"| {r['hub_to_lobe_std']:.3f} | {r['hub_latent_std']:.2e} | {r['stdp_updates']} | {r['stdp_mean_abs_dw']:.2e} |"
             for r in semmn_rows
         ]
     (out_dir / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

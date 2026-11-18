@@ -37,13 +37,20 @@ class SparseInterColumnConnectivity(nn.Module):
         self.inter_gain = nn.Parameter(torch.ones(state_dim))
 
     def _build_sparse_edges(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample a directed graph whose edge probability decays with distance.
+
+        `P(j -> i) = min(1, s * exp(-d_ij / (lambda_decay * spacing)))`, where `spacing`
+        is the typical distance between neighbouring columns, so `lambda_decay` is in
+        column spacings and does not depend on the grid's units. The scale `s` is
+        solved so the expected number of edges is `inter_density * C * (C - 1)`:
+        `inter_density` is the expected fraction of possible directed edges.
+        """
         centers = self.column_centers
         c = centers.shape[0]
         dist = torch.cdist(centers, centers, p=2)
-        decay = torch.exp(-dist / max(self.config.lambda_decay, 1e-6))
-        eye_mask = ~torch.eye(c, dtype=torch.bool, device=centers.device)
-        prob = (decay * self.config.inter_density).clamp(0.0, 1.0)
-        sampled = (torch.rand_like(prob) < prob) & eye_mask
+        eye = torch.eye(c, dtype=torch.bool, device=centers.device)
+        prob = self.edge_probabilities(dist, self.config.lambda_decay, self.config.inter_density)
+        sampled = (torch.rand_like(prob) < prob) & ~eye
         row_idx, col_idx = torch.where(sampled)
 
         if row_idx.numel() == 0:
@@ -51,9 +58,33 @@ class SparseInterColumnConnectivity(nn.Module):
             col_idx = torch.arange(1, c, device=centers.device)
 
         distances = dist[row_idx, col_idx]
-        weights = torch.randn(row_idx.numel(), device=centers.device) * self.config.init_weight_scale
+        # Half-normal init: every sampled edge starts excitatory and non-zero. A signed
+        # init clamped at `min_weight = 0` left about half the edges at exactly zero.
+        weights = torch.randn(row_idx.numel(), device=centers.device).abs() * self.config.init_weight_scale
         weights = weights.clamp(self.config.min_weight, self.config.max_weight)
         return row_idx.long(), col_idx.long(), distances.float(), weights.float()
+
+    @staticmethod
+    def edge_probabilities(dist: torch.Tensor, lambda_decay: float, density: float) -> torch.Tensor:
+        """Per-pair edge probability with expected density `density` (diagonal is 0)."""
+        c = dist.shape[0]
+        eye = torch.eye(c, dtype=torch.bool, device=dist.device)
+        if c < 2 or density <= 0.0:
+            return torch.zeros_like(dist)
+        spacing = dist.masked_fill(eye, float("inf")).min(dim=1).values.median().clamp_min(1e-6)
+        decay = torch.exp(-dist / (spacing * max(lambda_decay, 1e-6))).masked_fill(eye, 0.0)
+        target = min(float(density), 1.0) * c * (c - 1)
+        # Expected edge count is monotone in the scale, so bisect on it.
+        lo, hi = 0.0, 1.0
+        while (hi * decay).clamp(max=1.0).sum().item() < target and hi < 1e12:
+            hi *= 2.0
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if (mid * decay).clamp(max=1.0).sum().item() < target:
+                lo = mid
+            else:
+                hi = mid
+        return (hi * decay).clamp(max=1.0)
 
     def sparse_matrix(self) -> torch.Tensor:
         indices = torch.stack([self.row_idx, self.col_idx], dim=0)
@@ -84,18 +115,24 @@ class SparseInterColumnConnectivity(nn.Module):
         return inter_messages, scalar_activity
 
     @torch.no_grad()
-    def stdp_update(self, pre_activity: torch.Tensor, post_activity: torch.Tensor) -> None:
-        """Hebbian/STDP-like update on sparse edge values."""
+    def stdp_update(self, pre_activity: torch.Tensor, post_activity: torch.Tensor) -> float:
+        """Hebbian/STDP-like update on sparse edge values; returns the mean |delta w| applied.
+
+        The result is clamped to `[min_weight, max_weight]`, so with `min_weight = 0` an
+        update also zeroes any edge the optimizer has pushed negative.
+        """
         if not self.enabled or pre_activity.numel() == 0:
-            return
+            return 0.0
         pre = pre_activity.mean(dim=0)  # (C,)
         post = post_activity.mean(dim=0)  # (C,)
         corr = torch.outer(post, pre)
         edge_corr = corr[self.row_idx, self.col_idx]
         anti = self.config.anti_hebbian * self.edge_weights.abs()
         delta = self.config.stdp_lr * (edge_corr - anti)
-        new_w = self.edge_weights + delta
-        self.edge_weights.copy_(new_w.clamp(self.config.min_weight, self.config.max_weight))
+        new_w = (self.edge_weights + delta).clamp(self.config.min_weight, self.config.max_weight)
+        applied = (new_w - self.edge_weights).abs().mean().item()
+        self.edge_weights.copy_(new_w)
+        return applied
 
     def spatial_wiring_cost(self) -> torch.Tensor:
         return (self.edge_weights.abs() * self.edge_distances).mean()
