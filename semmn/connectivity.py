@@ -74,6 +74,8 @@ class SparseInterColumnConnectivity(nn.Module):
         scalar_activity = states.mean(dim=-1)  # (B, C)
         sparse_w = self.sparse_matrix()
         propagated = torch.sparse.mm(sparse_w, scalar_activity.transpose(0, 1)).transpose(0, 1)
+        # Per-channel gain on a per-column scalar. ColumnarDynamics adds this after
+        # its LayerNorm, so the gain and edge weights both act from initialisation.
         inter_messages = propagated.unsqueeze(-1) * self.inter_gain.view(1, 1, -1)
         return inter_messages, scalar_activity
 
