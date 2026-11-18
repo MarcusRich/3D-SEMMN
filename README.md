@@ -4,8 +4,8 @@ Minimal but fully functional PyTorch 2.3+ prototype of a **3D Spatially-Embedded
 
 - fixed 3D neuron coordinates (`100 x 100 x 50` in `config/default.yaml`)
 - 100 columnar modules (dense intra-column, sparse inter-column)
-- exponential distance-penalized sparse connectivity (`torch.sparse`)
-- Hebbian/STDP update every 100 steps
+- exponential distance-penalized sparse connectivity (`torch.sparse`): `lambda_decay` is in column spacings and `inter_density` is the expected fraction of possible directed edges
+- Hebbian/STDP update every `connectivity.stdp_interval` optimizer steps (default 100; `eval-small.yaml` uses 10 so it fires within its 96-step budget)
 - shared perceptual manifold hub with cross-modal attention
 - manifold regularization (latent `d=8`) + geometric twist layer (Cayley rotation)
 - multimodal losses: classification + contrastive + reconstruction + imagination cycle
@@ -112,5 +112,5 @@ the best validation accuracy, then scores that checkpoint on the test split
 
 - Start with `config/light.yaml` to confirm setup and debug quickly.
 - Increase `training.batch_size` and `model.recurrent_steps` gradually.
-- Keep STDP interval at `100` to limit plasticity overhead.
+- STDP runs every `connectivity.stdp_interval` optimizer steps; check that a run is long enough for it to fire.
 - Use mixed precision (`training.amp: true`) on CUDA devices.

@@ -35,12 +35,18 @@ class ModelConfig:
 class ConnectivityConfig:
     # False lesions inter-column message passing (messages are zero, STDP is skipped).
     enabled: bool = True
-    lambda_decay: float = 5.0
+    # Edge probability decays as exp(-d / (lambda_decay * column spacing)), so
+    # `lambda_decay` is in column spacings. At 1.0 most nearest neighbours are wired
+    # and the mean edge spans about two columns.
+    lambda_decay: float = 1.0
+    # Expected fraction of the C * (C - 1) possible directed edges (0.08 is about
+    # 8 in-edges per column on a 10x10 sheet).
     inter_density: float = 0.08
     intra_density_boost: float = 2.0
     min_weight: float = 0.0
     max_weight: float = 1.5
     init_weight_scale: float = 0.15
+    # Optimizer steps between STDP updates (train.py and eval_small.py).
     stdp_interval: int = 100
     stdp_lr: float = 0.01
     anti_hebbian: float = 0.05

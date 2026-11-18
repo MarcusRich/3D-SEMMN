@@ -115,8 +115,8 @@ class SEMMNModel(nn.Module):
         }
 
     @torch.no_grad()
-    def apply_stdp(self, pre_activity: torch.Tensor, post_activity: torch.Tensor) -> None:
-        self.connectivity.stdp_update(pre_activity, post_activity)
+    def apply_stdp(self, pre_activity: torch.Tensor, post_activity: torch.Tensor) -> float:
+        return self.connectivity.stdp_update(pre_activity, post_activity)
 
     def active_parameters(self) -> int:
         return self.connectivity.active_parameters()
