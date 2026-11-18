@@ -32,6 +32,10 @@ class ModelConfig:
     # Encoder features as two extra attention tokens in the hub (bypasses the grid).
     # Off: the hub reads only its columns, so it depends on inter-column connectivity.
     hub_modality_tokens: bool = False
+    # How the hub columns become the classifier's latent. "flat": all hub column
+    # states, standardised per feature across the batch (BatchNorm), then linear.
+    # "mean": the P1 attention mean-pool, which loses the label (see the P2 notes).
+    hub_readout: str = "flat"
 
 
 @dataclass

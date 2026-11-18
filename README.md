@@ -6,7 +6,8 @@ Minimal but fully functional PyTorch 2.3+ prototype of a **3D Spatially-Embedded
 - 100 columnar modules (dense intra-column, sparse inter-column)
 - exponential distance-penalized sparse connectivity (`torch.sparse`): `lambda_decay` is in column spacings and `inter_density` is the expected fraction of possible directed edges
 - Hebbian/STDP update every `connectivity.stdp_interval` optimizer steps (default 100; `eval-small.yaml` uses 10 so it fires within its 96-step budget)
-- shared perceptual manifold hub with cross-modal attention
+- shared hub read out from its columns: every hub column's state, flattened, standardised per feature
+  (BatchNorm) and mapped linearly to the latent (`model.hub_readout: flat`)
 - manifold regularization (latent `d=8`) + geometric twist layer (Cayley rotation)
 - multimodal losses: classification + contrastive + reconstruction + imagination cycle
 - ablations for spatial penalty and manifold loss
@@ -27,7 +28,7 @@ This code is designed for readability and modular experimentation rather than fu
 - `semmn/columns.py`: low-rank dense intra-column dynamics
 - `semmn/encoders.py`: vision CNN and audio 1D-conv encoder
 - `semmn/manifold.py`: manifold autoencoder and geometric twist
-- `semmn/hub.py`: shared manifold hub + attention + imagination decoders
+- `semmn/hub.py`: shared hub read-out + imagination decoders
 - `semmn/losses.py`: full training objective
 - `semmn/model.py`: full SEMMN forward pass
 - `semmn/dataset.py`: AV-MNIST loading with synthetic fallback
@@ -80,7 +81,9 @@ python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-sma
   - `loss.use_spatial_penalty: false`
   - `loss.use_manifold_loss: false`
   - `connectivity.enabled: false` (inter-column lesion)
-  - `model.hub_modality_tokens: true` (encoder features as extra hub attention tokens; off by default)
+  - `model.hub_modality_tokens: true` (encoder features as two extra hub tokens; off by default)
+  - `model.hub_readout: mean` (the earlier read-out: self-attention over the hub columns, mean-pooled;
+    it loses the label, see the P2 notes)
 - Synthetic audio (`data`): a tone whose pitch encodes the digit, with per-sample pitch jitter
   (`audio_pitch_jitter`) and white noise (`audio_snr_db`), so audio alone is informative but
   does not determine the label
