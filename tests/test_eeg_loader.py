@@ -31,10 +31,11 @@ def _write_condition(root, n_subjects=2, n_runs=2, seed=0):
         on = np.array([0.5, 1.0, 1.75, 2.0, 59.99])
         sio.savemat(
             root / "Stimuli" / "Text" / f"Run{r}.mat",
-            {"wordVec": words, "onset_time": on, "offset_time": on + 0.2},
+            {"wordVec": words, "onset_time": on, "offset_time": on + 0.2,
+             "sentence_boundaries": np.array([1.9, 59.0, 60.0])},
         )
         env = np.abs(np.sin(2 * np.pi * 3.0 * t)) + 0.1
-        sio.savemat(root / "Stimuli" / "Envelopes" / f"audio{r}_128Hz.mat", {"env": env, "fs": FS})
+        sio.savemat(root / "Stimuli" / "Envelopes" / f"audio{r}_128Hz.mat", {"env": env})  # no fs, as released
 
 
 def test_discovery_and_shapes(tmp_path):
@@ -48,6 +49,7 @@ def test_discovery_and_shapes(tmp_path):
     words = br.load_words(text[1])
     assert words.words == ("the", "old", "man", "was", "thin")
     np.testing.assert_allclose(words.offsets - words.onsets, 0.2)
+    np.testing.assert_array_equal(br.load_sentence_ids(text[1]), [0, 0, 0, 1, 2])
     e, efs = br.load_envelope(env[1])
     assert e.shape == (N,) and efs == FS
 
