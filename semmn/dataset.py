@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 
 from semmn.config import DataConfig, SEMMNConfig
@@ -158,31 +158,47 @@ def synthetic_avmnist(config: SEMMNConfig, root: str, train: bool, download: boo
     )
 
 
-def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader]:
+def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader, DataLoader]:
+    """Return `(train, val, test)` loaders.
+
+    Val is a fixed subset of the source's training split (`data.val_size`, drawn with
+    `data.split_seed`) and is disjoint from train; it is the only split to select on.
+    Test is the source's test split (MNIST-t10k for the synthetic data).
+    """
     root = "./data"
     if config.training.dataset_source == "hf":
         try:
-            train_ds = HuggingFaceAVMNIST(split="train")
-            val_ds = HuggingFaceAVMNIST(split="test")
+            pool = HuggingFaceAVMNIST(split="train")
+            test_ds = HuggingFaceAVMNIST(split="test")
         except Exception:
-            train_ds = synthetic_avmnist(config, root, train=True)
-            val_ds = synthetic_avmnist(config, root, train=False)
+            pool = synthetic_avmnist(config, root, train=True)
+            test_ds = synthetic_avmnist(config, root, train=False)
     else:
-        train_ds = synthetic_avmnist(config, root, train=True)
-        val_ds = synthetic_avmnist(config, root, train=False)
+        pool = synthetic_avmnist(config, root, train=True)
+        test_ds = synthetic_avmnist(config, root, train=False)
+    train_ds, val_ds = split_train_val(pool, config.data.val_size, config.data.split_seed)
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=config.training.batch_size,
-        shuffle=True,
-        num_workers=config.training.num_workers,
-        pin_memory=True,
+    def loader(ds: Dataset, shuffle: bool, workers: int) -> DataLoader:
+        return DataLoader(
+            ds,
+            batch_size=config.training.batch_size,
+            shuffle=shuffle,
+            num_workers=workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+
+    eval_workers = max(1, config.training.num_workers // 2) if config.training.num_workers else 0
+    return (
+        loader(train_ds, True, config.training.num_workers),
+        loader(val_ds, False, eval_workers),
+        loader(test_ds, False, eval_workers),
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.training.batch_size,
-        shuffle=False,
-        num_workers=max(1, config.training.num_workers // 2),
-        pin_memory=True,
-    )
-    return train_loader, val_loader
+
+
+def split_train_val(pool: Dataset, val_size: int, seed: int) -> tuple[Subset, Subset]:
+    """Disjoint train/val subsets of `pool`; the val indices depend only on `seed`."""
+    n = len(pool)
+    if not 0 < val_size < n:
+        raise ValueError(f"val_size must be in (0, {n}); got {val_size}")
+    perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed)).tolist()
+    return Subset(pool, perm[val_size:]), Subset(pool, perm[:val_size])

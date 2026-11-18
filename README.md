@@ -82,10 +82,13 @@ python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-sma
 
 ## Reported Metrics
 
-`train.py` logs:
+`train.py` holds out `data.val_size` samples of MNIST-train (fixed by
+`data.split_seed`) as the validation split. It keeps `best.pt` from the epoch with
+the best validation accuracy, then scores that checkpoint on the test split
+(MNIST-t10k) once. It logs:
 
 - classification loss and total loss
-- validation classification accuracy
+- validation classification accuracy, and the final test accuracy of `best.pt`
 - cross-modal retrieval accuracy (vision->audio nearest match in batch)
 - active sparse parameters (`nnz` proxy)
 - energy proxy (`mean(|w| * distance)`)
