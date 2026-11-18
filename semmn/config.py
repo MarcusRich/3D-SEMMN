@@ -29,6 +29,9 @@ class ModelConfig:
     attention_heads: int = 4
     # Legacy: add encoder features straight into the hub's fused latent (bypasses the grid).
     hub_direct_fusion: bool = False
+    # Encoder features as two extra attention tokens in the hub (bypasses the grid).
+    # Off: the hub reads only its columns, so it depends on inter-column connectivity.
+    hub_modality_tokens: bool = False
 
 
 @dataclass
