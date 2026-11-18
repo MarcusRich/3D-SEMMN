@@ -38,6 +38,7 @@ ENV_KEY = "env"
 WORDS_KEY = "wordVec"
 ONSET_KEY = "onset_time"
 OFFSET_KEY = "offset_time"
+SENTENCE_KEY = "sentence_boundaries"
 
 N_CHANNELS = 128
 
@@ -115,10 +116,31 @@ def load_words(path: str | Path) -> Words:
     return Words(words, on, off)
 
 
-def load_envelope(path: str | Path) -> tuple[np.ndarray, float]:
-    """Return (envelope (n,), fs) for one run."""
+def load_sentence_ids(path: str | Path) -> np.ndarray:
+    """Sentence index (0, 1, ...) of each word of a run, from the sentence-close times.
+
+    A word belongs to the first sentence that closes after its onset.
+    """
     m = load_mat(path)
-    return np.asarray(m[ENV_KEY], dtype=np.float64).reshape(-1), _scalar(m[FS_KEY])
+    on = np.atleast_1d(np.asarray(m[ONSET_KEY], dtype=float)).reshape(-1)
+    close = np.sort(np.atleast_1d(np.asarray(m[SENTENCE_KEY], dtype=float)).reshape(-1))
+    return np.searchsorted(close, on, side="right")
+
+
+def load_envelope(path: str | Path) -> tuple[np.ndarray, float]:
+    """Return (envelope (n,), fs) for one run.
+
+    The released envelope files hold only ``env``; the rate is in the file name
+    (``audio<r>_128Hz.mat``), and a ``fs`` variable wins when present.
+    """
+    m = load_mat(path)
+    env = np.asarray(m[ENV_KEY], dtype=np.float64).reshape(-1)
+    if FS_KEY in m:
+        return env, _scalar(m[FS_KEY])
+    rate = re.search(r"_(\d+)Hz\.mat$", Path(path).name)
+    if rate is None:
+        raise ValueError(f"{Path(path).name}: no fs variable and no rate in the file name")
+    return env, float(rate.group(1))
 
 
 def bandpass(x: np.ndarray, fs: float, band: tuple[float, float], order: int = 3) -> np.ndarray:
