@@ -25,6 +25,8 @@ class SparseInterColumnConnectivity(nn.Module):
         self.state_dim = state_dim
         self.config = config
         self.num_columns = int(column_centers.shape[0])
+        # Instance flag so a trained model can also be lesioned at test time.
+        self.enabled = bool(config.enabled)
         self.register_buffer("column_centers", column_centers.clone())
 
         row_idx, col_idx, distances, weights = self._build_sparse_edges()
@@ -72,6 +74,8 @@ class SparseInterColumnConnectivity(nn.Module):
             scalar_activity: `(B, C)` pooled activity used for STDP.
         """
         scalar_activity = states.mean(dim=-1)  # (B, C)
+        if not self.enabled:
+            return torch.zeros_like(states), scalar_activity
         sparse_w = self.sparse_matrix()
         propagated = torch.sparse.mm(sparse_w, scalar_activity.transpose(0, 1)).transpose(0, 1)
         # Per-channel gain on a per-column scalar. ColumnarDynamics adds this after
@@ -82,7 +86,7 @@ class SparseInterColumnConnectivity(nn.Module):
     @torch.no_grad()
     def stdp_update(self, pre_activity: torch.Tensor, post_activity: torch.Tensor) -> None:
         """Hebbian/STDP-like update on sparse edge values."""
-        if pre_activity.numel() == 0:
+        if not self.enabled or pre_activity.numel() == 0:
             return
         pre = pre_activity.mean(dim=0)  # (C,)
         post = post_activity.mean(dim=0)  # (C,)

@@ -62,3 +62,26 @@ def test_model_logits_depend_on_connectivity_at_init(tiny_config) -> None:
         without_edges = model(vision, audio)["logits"]
     assert not torch.allclose(with_edges, without_edges, atol=1e-5)
 
+
+def test_disabled_connectivity_sends_no_messages_and_skips_stdp() -> None:
+    conn = _connectivity()
+    conn.enabled = False
+    states = _states()
+    messages, activity = conn(states)
+    assert torch.count_nonzero(messages) == 0
+    assert activity.shape == (4, 3)
+    before = conn.edge_weights.detach().clone()
+    conn.stdp_update(activity, activity)
+    assert torch.equal(conn.edge_weights, before)
+
+
+def test_connectivity_flag_matches_zeroed_edges(tiny_config) -> None:
+    tiny_config.connectivity.enabled = False
+    model = SEMMNModel(tiny_config).eval()
+    vision, audio = torch.rand(4, 1, 28, 28), torch.rand(4, 1, 112, 112)
+    with torch.no_grad():
+        lesioned = model(vision, audio)["logits"]
+        model.connectivity.enabled = True
+        model.connectivity.edge_weights.zero_()
+        zeroed = model(vision, audio)["logits"]
+    assert torch.allclose(lesioned, zeroed)

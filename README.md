@@ -64,6 +64,14 @@ python visualize.py \
   --device cuda
 ```
 
+Small fixed-split evaluation (CPU, a few minutes) and tests:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-small/
+```
+
 ## Config Notes
 
 - `config/default.yaml`: full spatial grid (`100x100x50`)

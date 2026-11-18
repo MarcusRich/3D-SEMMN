@@ -33,6 +33,8 @@ class ModelConfig:
 
 @dataclass
 class ConnectivityConfig:
+    # False lesions inter-column message passing (messages are zero, STDP is skipped).
+    enabled: bool = True
     lambda_decay: float = 5.0
     inter_density: float = 0.08
     intra_density_boost: float = 2.0

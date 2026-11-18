@@ -22,9 +22,9 @@ class Batch:
 class SyntheticAVMNIST(Dataset):
     """Pair MNIST vision with synthetic spectrogram-like audio."""
 
-    def __init__(self, root: str, train: bool = True) -> None:
+    def __init__(self, root: str, train: bool = True, download: bool = True) -> None:
         tfm = transforms.ToTensor()
-        self.mnist = datasets.MNIST(root=root, train=train, download=True, transform=tfm)
+        self.mnist = datasets.MNIST(root=root, train=train, download=download, transform=tfm)
 
     def __len__(self) -> int:
         return len(self.mnist)
