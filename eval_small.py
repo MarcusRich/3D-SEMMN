@@ -8,6 +8,10 @@ Rows reported:
   semmn                      full model
   semmn_lesion_train         trained and tested with inter-column connectivity off
   semmn_lesion_test          the full model with connectivity switched off at test time
+  *_hub_probe                a fixed logistic-regression probe on the frozen model's
+                             hub-column states (fit on train, scored on test): how much
+                             label information reaches the hub, apart from the read-out
+  semmn_hub_tokens           reference: the full model with model.hub_modality_tokens on
   mlp                        one-hidden-layer MLP on the raw vision + audio inputs
   mlp_vision_only            the same MLP on vision alone (reference)
   mlp_audio_only             the same MLP on audio alone (reference)
@@ -155,6 +159,30 @@ def hub_diagnostics(model: SEMMNModel, split: Split, batch_size: int) -> dict[st
     }
 
 
+@torch.no_grad()
+def _hub_state_features(model: SEMMNModel, split: Split, batch_size: int) -> np.ndarray:
+    model.eval()
+    hub = model.grid.hub_columns
+    return torch.cat(
+        [model(v, a)["column_states"][:, hub, :].flatten(1) for v, a, _ in _batches(split, batch_size)]
+    ).numpy()
+
+
+def hub_probe(model: SEMMNModel, splits: dict[str, Split], batch_size: int) -> float:
+    """Test accuracy of a fixed logistic regression on the trained model's hub-column states.
+
+    The probe is fit on train and scored on test, with the model frozen. It measures how
+    much label information reaches the hub through the grid, separately from whether the
+    model's own read-out can use it. The hub gets no direct input, so with connectivity
+    off its states are constant and the probe sits at the majority-class rate.
+    """
+    x_train = _hub_state_features(model, splits["train"], batch_size)
+    x_test = _hub_state_features(model, splits["test"], batch_size)
+    scaler = StandardScaler().fit(x_train)
+    clf = LogisticRegression(C=1.0, max_iter=500).fit(scaler.transform(x_train), splits["train"].label.numpy())
+    return float(clf.score(scaler.transform(x_test), splits["test"].label.numpy()))
+
+
 def _train_with_val_selection(
     model: nn.Module,
     epochs: int,
@@ -172,10 +200,16 @@ def _train_with_val_selection(
 
 
 def train_semmn(
-    cfg: SEMMNConfig, splits: dict[str, Split], seed: int, connectivity: bool
+    cfg: SEMMNConfig,
+    splits: dict[str, Split],
+    seed: int,
+    connectivity: bool,
+    hub_modality_tokens: bool | None = None,
 ) -> tuple[SEMMNModel, dict[str, Any]]:
     cfg = copy.deepcopy(cfg)
     cfg.connectivity.enabled = connectivity
+    if hub_modality_tokens is not None:
+        cfg.model.hub_modality_tokens = hub_modality_tokens
     set_seed(seed)
     model = SEMMNModel(cfg)
     optimizer = torch.optim.AdamW(
@@ -278,11 +312,18 @@ def run(config_path: str, output_dir: str | None = None) -> list[dict[str, Any]]
         model, info = train_semmn(cfg, splits, seed, connectivity=True)
         info.update(hub_diagnostics(model, splits["val"], bs))
         record("semmn", seed, semmn_accuracy(model, splits["test"], bs), **info)
+        record("semmn_hub_probe", seed, hub_probe(model, splits, bs))
         model.connectivity.enabled = False
         record("semmn_lesion_test", seed, semmn_accuracy(model, splits["test"], bs))
+        record("semmn_lesion_test_hub_probe", seed, hub_probe(model, splits, bs))
 
         model, info = train_semmn(cfg, splits, seed, connectivity=False)
         record("semmn_lesion_train", seed, semmn_accuracy(model, splits["test"], bs), **info)
+        record("semmn_lesion_train_hub_probe", seed, hub_probe(model, splits, bs))
+
+        # Reference: the same model with the encoder-feature tokens back in the hub.
+        model, info = train_semmn(cfg, splits, seed, connectivity=True, hub_modality_tokens=True)
+        record("semmn_hub_tokens", seed, semmn_accuracy(model, splits["test"], bs), **info)
 
         for which, name in (("both", "mlp"), ("vision", "mlp_vision_only"), ("audio", "mlp_audio_only")):
             acc, info = train_mlp(splits, seed, epochs, bs, cfg.training.lr, which)

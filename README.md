@@ -79,6 +79,11 @@ python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-sma
 - Ablations:
   - `loss.use_spatial_penalty: false`
   - `loss.use_manifold_loss: false`
+  - `connectivity.enabled: false` (inter-column lesion)
+  - `model.hub_modality_tokens: true` (encoder features as extra hub attention tokens; off by default)
+- Synthetic audio (`data`): a tone whose pitch encodes the digit, with per-sample pitch jitter
+  (`audio_pitch_jitter`) and white noise (`audio_snr_db`), so audio alone is informative but
+  does not determine the label
 
 ## Reported Metrics
 
