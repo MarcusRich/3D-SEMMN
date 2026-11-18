@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -69,16 +70,19 @@ def evaluate(
     }
 
 
-def main() -> None:
-    args = parse_args()
-    cfg = SEMMNConfig.from_yaml(args.config)
-    set_seed(cfg.seed)
+def run(
+    cfg: SEMMNConfig,
+    device: torch.device,
+    out_dir: Path,
+    loaders: tuple | None = None,
+) -> dict:
+    """Train, keep the epoch with the best validation accuracy, then score test once.
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    out_dir = Path(args.output_dir or cfg.paths.output_dir)
+    The validation split is held out from MNIST-train (`data.val_size`,
+    `data.split_seed`). Test is never used for selection.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    train_loader, val_loader = build_dataloaders(cfg)
+    train_loader, val_loader, test_loader = loaders or build_dataloaders(cfg)
     model = SEMMNModel(cfg).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
@@ -86,7 +90,8 @@ def main() -> None:
     scaler = GradScaler(enabled=(cfg.training.amp and device.type == "cuda"))
 
     history: list[dict[str, float]] = []
-    best_retrieval = -1.0
+    best_val = -1.0
+    best_epoch = -1
     global_step = 0
 
     for epoch in range(cfg.training.epochs):
@@ -123,31 +128,57 @@ def main() -> None:
                 history.append(row)
                 print(json.dumps(row))
 
-        eval_metrics = evaluate(model, val_loader, cfg, device, cfg.training.val_batches)
+        val_metrics = evaluate(model, val_loader, cfg, device, cfg.training.val_batches)
         history.append(
             {
                 "epoch": float(epoch),
-                "val_accuracy": float(eval_metrics["accuracy"]),
-                "val_cross_modal_retrieval": float(eval_metrics["cross_modal_retrieval"]),
+                "val_accuracy": float(val_metrics["accuracy"]),
+                "val_cross_modal_retrieval": float(val_metrics["cross_modal_retrieval"]),
             }
         )
-        print(json.dumps({"epoch": epoch, **eval_metrics}))
+        print(json.dumps({"epoch": epoch, "split": "val", **val_metrics}))
 
-        if eval_metrics["cross_modal_retrieval"] > best_retrieval:
-            best_retrieval = eval_metrics["cross_modal_retrieval"]
+        # Select on validation classification accuracy: it is the task the model is
+        # trained for, and retrieval only probes the encoder projections.
+        if val_metrics["accuracy"] > best_val:
+            best_val, best_epoch = val_metrics["accuracy"], epoch
             torch.save(
                 {
                     "model": model.state_dict(),
-                    "config": cfg.__dict__,
+                    "config": asdict(cfg),
                     "epoch": epoch,
-                    "metrics": eval_metrics,
+                    "selected_on": "val_accuracy",
+                    "val_metrics": val_metrics,
                 },
                 out_dir / "best.pt",
             )
 
+    torch.save({"model": model.state_dict()}, out_dir / "last.pt")
+
+    # Score the selected checkpoint on test exactly once.
+    best = torch.load(out_dir / "best.pt", map_location=device)
+    model.load_state_dict(best["model"])
+    test_metrics = evaluate(model, test_loader, cfg, device, max_batches=len(test_loader))
+    history.append(
+        {
+            "epoch": float(best_epoch),
+            "test_accuracy": float(test_metrics["accuracy"]),
+            "test_cross_modal_retrieval": float(test_metrics["cross_modal_retrieval"]),
+        }
+    )
+    print(json.dumps({"epoch": best_epoch, "split": "test", **test_metrics}))
+
     with (out_dir / "history.json").open("w", encoding="utf-8") as f:
         json.dump(history, f, indent=2)
-    torch.save({"model": model.state_dict()}, out_dir / "last.pt")
+    return {"best_epoch": best_epoch, "val_accuracy": best_val, "test": test_metrics}
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = SEMMNConfig.from_yaml(args.config)
+    set_seed(cfg.seed)
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    run(cfg, device, Path(args.output_dir or cfg.paths.output_dir))
 
 
 if __name__ == "__main__":

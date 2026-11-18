@@ -67,6 +67,10 @@ class DataConfig:
     # SNR and no model can read the label off the audio perfectly.
     audio_snr_db: float = -10.0
     audio_pitch_jitter: float = 0.35
+    # train.py holds out this many MNIST-train samples (fixed by `split_seed`) for
+    # checkpoint selection; the source's test split is scored once, after selection.
+    val_size: int = 5000
+    split_seed: int = 1234
 
 
 @dataclass
