@@ -229,7 +229,7 @@ def train_semmn(
             compute_losses(outputs, label, cfg, model.connectivity)["total"].backward()
             optimizer.step()
             step += 1
-            if step % cfg.connectivity.stdp_interval == 0 and cfg.connectivity.enabled:
+            if cfg.connectivity.stdp_due(step):
                 # Same schedule as train.py. Skipped when lesioned (it would be a no-op).
                 stdp_deltas.append(model.apply_stdp(outputs["pre_activity"], outputs["post_activity"]))
 
