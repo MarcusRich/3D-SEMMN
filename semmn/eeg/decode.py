@@ -41,8 +41,8 @@ def score_matrix(observed: np.ndarray, predicted: np.ndarray) -> np.ndarray:
         raise ValueError("observed and predicted windows must share (T, C)")
     zo = _zscore_time(np.asarray(observed, dtype=np.float64))
     zp = _zscore_time(np.asarray(predicted, dtype=np.float64))
-    t, c = observed.shape[1], observed.shape[2]
-    return np.einsum("itc,jtc->ij", zo, zp) / (t * c)
+    n, t, c = observed.shape
+    return (zo.reshape(n, t * c) @ zp.reshape(len(zp), t * c).T) / (t * c)
 
 
 def true_ranks(scores: np.ndarray, truth: np.ndarray | None = None) -> np.ndarray:
