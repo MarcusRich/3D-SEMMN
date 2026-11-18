@@ -54,6 +54,8 @@ def test_end_to_end_smoke(tmp_path: Path) -> None:
         "semmn_lesion_test",
         "semmn_lesion_train",
         "mlp",
+        "mlp_vision_only",
+        "mlp_audio_only",
         "logreg",
         "logreg_vision_only",
         "logreg_audio_only",

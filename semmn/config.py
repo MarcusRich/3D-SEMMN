@@ -59,6 +59,17 @@ class LossConfig:
 
 
 @dataclass
+class DataConfig:
+    # Synthetic audio: a tone whose pitch encodes the digit, buried in white noise.
+    # `audio_snr_db` is tone power over noise power in the waveform; lower is less
+    # informative. `audio_pitch_jitter` is the per-sample pitch std in units of the
+    # spacing between adjacent digits, so neighbouring digits overlap even at high
+    # SNR and no model can read the label off the audio perfectly.
+    audio_snr_db: float = -10.0
+    audio_pitch_jitter: float = 0.35
+
+
+@dataclass
 class TrainingConfig:
     dataset_source: str = "synthetic"
     batch_size: int = 64
@@ -83,6 +94,7 @@ class SEMMNConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
     loss: LossConfig = field(default_factory=LossConfig)
+    data: DataConfig = field(default_factory=DataConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
@@ -110,6 +122,7 @@ class SEMMNConfig:
                 ConnectivityConfig(), raw.get("connectivity", {})
             ),
             loss=_merge_dataclass(LossConfig(), raw.get("loss", {})),
+            data=_merge_dataclass(DataConfig(), raw.get("data", {})),
             training=_merge_dataclass(TrainingConfig(), raw.get("training", {})),
             paths=_merge_dataclass(PathsConfig(), raw.get("paths", {})),
         )
