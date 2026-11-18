@@ -1,0 +1,32 @@
+# Small, fixed evaluation subset (see eval_small.py).
+# Architecture matches config/light.yaml; only data size and training budget differ.
+# Splits: train and val are disjoint subsets of MNIST-train drawn with eval.data_seed;
+# test comes from MNIST-t10k. Val is the only split used for epoch selection; test is
+# scored once per run, after selection.
+seed: 0
+grid:
+  dims: [100, 100, 10]
+  n_columns_xy: [10, 10]
+
+model:
+  recurrent_steps: 4
+  state_dim: 24
+
+connectivity:
+  inter_density: 0.10
+
+training:
+  batch_size: 64
+  epochs: 3
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 0
+  amp: false
+
+eval:
+  data_seed: 1234
+  train_size: 2000
+  val_size: 500
+  test_size: 1000
+  seeds: [0, 1, 2, 3, 4]
+  output_dir: outputs/eval-small
