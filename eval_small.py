@@ -9,10 +9,13 @@ Rows reported:
   semmn_lesion_train         trained and tested with inter-column connectivity off
   semmn_lesion_test          the full model with connectivity switched off at test time
   mlp                        one-hidden-layer MLP on the raw vision + audio inputs
+  mlp_vision_only            the same MLP on vision alone (reference)
+  mlp_audio_only             the same MLP on audio alone (reference)
   logreg                     logistic regression on the raw vision + audio inputs
   logreg_vision_only         reference: vision input alone
-  logreg_audio_only          reference: audio input alone (probes label leakage in the
-                             synthetic audio)
+  logreg_audio_only          reference: audio input alone. The synthetic audio is only
+                             weakly informative (config `data`), so this should sit well
+                             below 1.0; a value near 1.0 means the audio leaks the label.
 
 usage: python eval_small.py --config config/eval-small.yaml
 """
@@ -36,7 +39,7 @@ import yaml
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from semmn.config import SEMMNConfig
+from semmn.config import DataConfig, SEMMNConfig
 from semmn.dataset import SyntheticAVMNIST
 from semmn.losses import compute_losses
 from semmn.model import SEMMNModel
@@ -81,11 +84,15 @@ def _materialise(ds: SyntheticAVMNIST, indices: torch.Tensor) -> Split:
     )
 
 
-def build_splits(eval_cfg: dict[str, Any], root: str = DATA_ROOT) -> dict[str, Split]:
+def build_splits(
+    eval_cfg: dict[str, Any], root: str = DATA_ROOT, data_cfg: DataConfig | None = None
+) -> dict[str, Split]:
     """Fixed train/val (disjoint, from MNIST-train) and test (from MNIST-t10k)."""
+    data_cfg = data_cfg or DataConfig()
     g = torch.Generator().manual_seed(int(eval_cfg["data_seed"]))
-    train_pool = SyntheticAVMNIST(root=root, train=True, download=False)
-    test_pool = SyntheticAVMNIST(root=root, train=False, download=False)
+    audio = {"audio_snr_db": data_cfg.audio_snr_db, "audio_pitch_jitter": data_cfg.audio_pitch_jitter}
+    train_pool = SyntheticAVMNIST(root=root, train=True, download=False, **audio)
+    test_pool = SyntheticAVMNIST(root=root, train=False, download=False, **audio)
     n_train, n_val, n_test = (int(eval_cfg[k]) for k in ("train_size", "val_size", "test_size"))
     if n_train + n_val > len(train_pool) or n_test > len(test_pool):
         raise ValueError("eval split sizes exceed the available MNIST data")
@@ -187,11 +194,14 @@ def train_semmn(
 
 
 def train_mlp(
-    splits: dict[str, Split], seed: int, epochs: int, batch_size: int, lr: float
+    splits: dict[str, Split], seed: int, epochs: int, batch_size: int, lr: float, which: str = "both"
 ) -> tuple[float, dict[str, Any]]:
     set_seed(seed)
-    scaler = StandardScaler().fit(splits["train"].flat_features())
-    x = {k: torch.tensor(scaler.transform(s.flat_features()), dtype=torch.float32) for k, s in splits.items()}
+    scaler = StandardScaler().fit(splits["train"].flat_features(which))
+    x = {
+        k: torch.tensor(scaler.transform(s.flat_features(which)), dtype=torch.float32)
+        for k, s in splits.items()
+    }
     y = {k: s.label for k, s in splits.items()}
     model = nn.Sequential(nn.Linear(x["train"].shape[1], 256), nn.ReLU(), nn.Linear(256, 10))
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -235,7 +245,7 @@ def run(config_path: str, output_dir: str | None = None) -> list[dict[str, Any]]
     out_dir = Path(output_dir or eval_cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = build_splits(eval_cfg)
+    splits = build_splits(eval_cfg, data_cfg=cfg.data)
     bs, epochs = cfg.training.batch_size, cfg.training.epochs
     rows: list[dict[str, Any]] = []
 
@@ -254,8 +264,9 @@ def run(config_path: str, output_dir: str | None = None) -> list[dict[str, Any]]
         model, info = train_semmn(cfg, splits, seed, connectivity=False)
         record("semmn_lesion_train", seed, semmn_accuracy(model, splits["test"], bs), **info)
 
-        acc, info = train_mlp(splits, seed, epochs, bs, cfg.training.lr)
-        record("mlp", seed, acc, **info)
+        for which, name in (("both", "mlp"), ("vision", "mlp_vision_only"), ("audio", "mlp_audio_only")):
+            acc, info = train_mlp(splits, seed, epochs, bs, cfg.training.lr, which)
+            record(name, seed, acc, **info)
 
     # Logistic regression is convex with a deterministic solver, so it runs once.
     for which, name in (("both", "logreg"), ("vision", "logreg_vision_only"), ("audio", "logreg_audio_only")):

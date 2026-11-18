@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 
-from semmn.config import SEMMNConfig
+from semmn.config import DataConfig, SEMMNConfig
 
 
 @dataclass
@@ -20,41 +20,71 @@ class Batch:
 
 
 class SyntheticAVMNIST(Dataset):
-    """Pair MNIST vision with synthetic spectrogram-like audio."""
+    """Pair MNIST vision with a synthetic spectrogram whose pitch weakly encodes the label.
 
-    def __init__(self, root: str, train: bool = True, download: bool = True) -> None:
+    Each sample is a 1 s tone (fundamental plus second harmonic) at
+    `110 + 22 * (label + jitter)` Hz, with `jitter ~ N(0, audio_pitch_jitter)`, a random
+    phase, and additive white noise at `audio_snr_db`. The jitter makes neighbouring
+    digits overlap, which caps how well any model can read the label from audio alone;
+    the SNR sets how hard the tone is to find. Both are per-sample and fixed by the
+    split and index, so a dataset is deterministic.
+
+    The previous generator was a noiseless, fixed-phase tone per label, so a linear
+    model read the label off the audio with 100% accuracy and every benchmark
+    saturated.
+    """
+
+    SAMPLE_RATE = 2048  # Hz; the highest harmonic (2 * 308 Hz) stays below Nyquist.
+    N_FFT = 222  # gives exactly 112 frequency bins, the audio encoder's input height.
+    HOP = 18
+
+    def __init__(
+        self,
+        root: str,
+        train: bool = True,
+        download: bool = True,
+        audio_snr_db: float = DataConfig.audio_snr_db,
+        audio_pitch_jitter: float = DataConfig.audio_pitch_jitter,
+    ) -> None:
         tfm = transforms.ToTensor()
         self.mnist = datasets.MNIST(root=root, train=train, download=download, transform=tfm)
+        self.train = train
+        self.audio_snr_db = float(audio_snr_db)
+        self.audio_pitch_jitter = float(audio_pitch_jitter)
 
     def __len__(self) -> int:
         return len(self.mnist)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         vision, label = self.mnist[idx]
-        audio = self._label_to_spectrogram(int(label), idx)
+        # Seed on (split, index) so the train and test pools never share noise draws.
+        seed = 2 * int(idx) + (0 if self.train else 1)
+        audio = self._label_to_spectrogram(int(label), seed)
         return vision, audio, torch.tensor(label, dtype=torch.long)
 
     def _label_to_spectrogram(self, label: int, seed: int) -> torch.Tensor:
         g = torch.Generator().manual_seed(seed)
-        t = torch.linspace(0, 1, steps=224)
-        base_freq = 110.0 + 22.0 * float(label)
-        sine = (
-            torch.sin(2.0 * torch.pi * base_freq * t)
-            + 0.3 * torch.sin(2.0 * torch.pi * 2.0 * base_freq * t)
-            + 0.2 * torch.randn(224, generator=g)
+        n = self.SAMPLE_RATE
+        t = torch.arange(n, dtype=torch.float32) / self.SAMPLE_RATE
+        jitter = self.audio_pitch_jitter * torch.randn((), generator=g).item()
+        freq = 110.0 + 22.0 * (float(label) + jitter)
+        phase = 2.0 * torch.pi * torch.rand((), generator=g).item()
+        tone = torch.sin(2.0 * torch.pi * freq * t + phase) + 0.3 * torch.sin(
+            2.0 * torch.pi * 2.0 * freq * t + 2.0 * phase
         )
+        noise_power = tone.pow(2).mean() / (10.0 ** (self.audio_snr_db / 10.0))
+        wave = tone + noise_power.sqrt() * torch.randn(n, generator=g)
         spec = torch.stft(
-            sine,
-            n_fft=64,
-            hop_length=16,
-            win_length=64,
+            wave,
+            n_fft=self.N_FFT,
+            hop_length=self.HOP,
+            win_length=self.N_FFT,
+            window=torch.hann_window(self.N_FFT),
             return_complex=True,
-        ).abs()
-        spec = spec.unsqueeze(0)  # (1, F, T)
-        spec = F.interpolate(spec.unsqueeze(0), size=(112, 112), mode="bilinear", align_corners=False)
-        spec = spec.squeeze(0)
-        spec = spec / (spec.max().clamp_min(1e-6))
-        return spec
+        ).abs()  # (112, frames)
+        spec = F.interpolate(spec[None, None], size=(112, 112), mode="bilinear", align_corners=False)
+        spec = spec.squeeze(0)  # (1, 112, 112)
+        return spec / spec.max().clamp_min(1e-6)
 
 
 class HuggingFaceAVMNIST(Dataset):
@@ -118,6 +148,16 @@ def _to_tensor_audio(value) -> torch.Tensor:
     return x
 
 
+def synthetic_avmnist(config: SEMMNConfig, root: str, train: bool, download: bool = True) -> SyntheticAVMNIST:
+    return SyntheticAVMNIST(
+        root=root,
+        train=train,
+        download=download,
+        audio_snr_db=config.data.audio_snr_db,
+        audio_pitch_jitter=config.data.audio_pitch_jitter,
+    )
+
+
 def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader]:
     root = "./data"
     if config.training.dataset_source == "hf":
@@ -125,11 +165,11 @@ def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader]:
             train_ds = HuggingFaceAVMNIST(split="train")
             val_ds = HuggingFaceAVMNIST(split="test")
         except Exception:
-            train_ds = SyntheticAVMNIST(root=root, train=True)
-            val_ds = SyntheticAVMNIST(root=root, train=False)
+            train_ds = synthetic_avmnist(config, root, train=True)
+            val_ds = synthetic_avmnist(config, root, train=False)
     else:
-        train_ds = SyntheticAVMNIST(root=root, train=True)
-        val_ds = SyntheticAVMNIST(root=root, train=False)
+        train_ds = synthetic_avmnist(config, root, train=True)
+        val_ds = synthetic_avmnist(config, root, train=False)
 
     train_loader = DataLoader(
         train_ds,
