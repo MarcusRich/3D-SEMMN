@@ -55,9 +55,11 @@ Train (full 500K-neuron spatial grid metadata):
 python train.py --config config/default.yaml --device cuda
 ```
 
-Generate figures:
+Generate figures. No checkpoint is committed: `outputs/best.pt` is written by
+`train.py` (the epoch with the best validation accuracy), so train first:
 
 ```bash
+python train.py --config config/light.yaml --device cpu   # writes outputs/best.pt
 python visualize.py \
   --config config/light.yaml \
   --checkpoint outputs/best.pt \
