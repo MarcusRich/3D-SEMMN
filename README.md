@@ -98,6 +98,34 @@ python -I eeg_p3.py summarize
 all-MiniLM-L6-v2 from the Hugging Face cache. `--backend gpt2` needs `transformers`.
 The release lists content words only, so neither backend sees the full transcript.
 
+## GPT-2 word features and distractor ranking (P4)
+
+P4 swaps the stand-in word features for GPT-2 small (`openai-community/gpt2`, loaded
+from the Hugging Face cache). Each run's content-word stream is read from the run's
+start only, lower-cased, with a period at each sentence close. Per word it gives the
+surprisal (bits, summed over sub-word tokens) and the layer-6 state at its last token,
+reduced to 20 PCs fitted on training-run words. Tiers: `A_env`, `B_env_onset`,
+`S_env_onset_sur` (+ GPT-2 surprisal), `E_env_onset_sur_emb` (+ GPT-2 embedding).
+
+`distract` samples 88 GPT-2 distractor word sequences for every held-out 10 s window
+(same audio, same word onsets; see `semmn/eeg/distractors.py`). `encode --distractors`
+then ranks the true words against them three ways: with the subject's EEG, with
+another window's EEG (must be at chance) and with the GPT-2 prior alone.
+
+```bash
+python -I eeg_p3.py words --backend gpt2     # writes cache/lm_gpt2_run_l6.npz
+LM="$SEMMN_BRODERICK/cache/lm_gpt2_run_l6.npz"
+python -I eeg_p3.py distract --condition forward --subjects 1-19 --lm "$LM"
+python -I eeg_p3.py distract --condition reverse --subjects 1-10 --lm "$LM"
+for c in forward reverse; do
+  s=$([ $c = forward ] && echo 1-19 || echo 1-10)
+  python -I eeg_p3.py encode --condition $c --subjects $s --folds 5 --lm "$LM" \
+    --tiers A_env,B_env_onset,S_env_onset_sur,E_env_onset_sur_emb --main-tier E_env_onset_sur_emb \
+    --distractors "$SEMMN_BRODERICK/cache/distractors_${c}_w10_k88_p0.9_l6.npz" --out outputs/eeg_p4
+done
+python -I eeg_p4.py --out outputs/eeg_p4 --p3 outputs/eeg   # writes outputs/eeg_p4/summary_p4.md
+```
+
 ## Config Notes
 
 - `config/default.yaml`: full spatial grid (`100x100x50`)

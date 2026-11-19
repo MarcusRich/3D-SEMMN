@@ -146,18 +146,36 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
                  embedding=vec.astype(np.float32), run=run_of)
         log(f"local word features: {len(flat)} content words")
         return out
-    out = root / "cache" / f"lm_gpt2_layer{layer}.npz"
+    out = root / "cache" / f"lm_gpt2_run_l{layer}.npz"
     if out.exists():
         return out
+    torch_threads()
+    log("GPT-2 is fed each run's content-word stream (no function words): off-distribution input")
+    model, tok = lm.load_gpt2(GPT2_NAME)
+    sent = story_sentences(root)
+    sur, emb, final, n_tok = [], [], [], []
+    for r in sorted(words):
+        flags = lm.sentence_final(sent[r])
+        units, _ = lm.run_units(words[r].words, tok.encode, flags)
+        n_tok.append(1 + sum(len(u) for u in units))
+        s_r, e_r = lm.gpt2_word_features(words[r].words, model, tok.encode, layer=layer, period_after=flags)
+        sur.append(s_r)
+        emb.append(e_r)
+        final.append(flags)
+    np.savez(out, surprisal=np.concatenate(sur), embedding=np.concatenate(emb).astype(np.float32), run=run_of,
+             sentence_final=np.concatenate(final), run_tokens=np.array(n_tok))
+    log(f"GPT-2 features: {len(flat)} words, layer {layer}, run context only "
+        f"({min(n_tok)}-{max(n_tok)} tokens per run)")
+    return out
+
+
+def torch_threads() -> None:
     import torch
 
-    torch.set_num_threads(4)
-    log("GPT-2 is fed the content-word stream only (no function words): off-distribution input")
-    model, tok = lm.load_gpt2("gpt2")
-    surprisal, emb = lm.gpt2_word_features(flat, model, tok.encode, layer=layer)
-    np.savez(out, surprisal=surprisal, embedding=emb.astype(np.float32), run=run_of)
-    log(f"GPT-2 features: {len(flat)} words, layer {layer}")
-    return out
+    torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
+
+
+GPT2_NAME = "openai-community/gpt2"
 
 
 # ---------------------------------------------------------------- design
@@ -175,12 +193,22 @@ class Design:
         tr = np.isin(run_of, train_runs)
         # Word features, scaled with training-run words only.
         word_feats: dict[str, np.ndarray] = {}
+        # Raw word value -> regressor value, fitted on training-run words only; kept so
+        # distractor words can be put through exactly the same transform.
+        self.transform: dict[str, object] = {}
         for name in ("surprisal", "dissimilarity"):
             if name in z.files:
                 v = z[name]
-                word_feats[name] = ((v - v[tr].mean()) / v[tr].std())[:, None]
+                mu, sd = float(v[tr].mean()), float(v[tr].std())
+                self.transform[name] = lambda x, mu=mu, sd=sd: ((np.asarray(x, float) - mu) / sd)[..., None]
+                word_feats[name] = self.transform[name](v)
         if "embedding" in z.files and n_pcs > 0:
-            word_feats["embedding"] = lm.Pca.fit(z["embedding"][tr], n_pcs).transform(z["embedding"])
+            self.pca = lm.Pca.fit(z["embedding"][tr], n_pcs)
+            self.transform["embedding"] = self.pca.transform
+            word_feats["embedding"] = self.pca.transform(z["embedding"])
+        self.word_values = word_feats
+        self.raw_surprisal = z["surprisal"] if "surprisal" in z.files else None
+        self.run_of = run_of
         self.width = {"env": 1, "onset": 1, **{k: v.shape[1] for k, v in word_feats.items()}}
         self.order = [n for n in ("env", "onset") + ft.WORD_FEATURES if n in self.width]
         self.first, self.count = ft.n_lags(FS, 0.0, 0.6)
@@ -189,6 +217,10 @@ class Design:
         self._memo: dict[tuple[int, int], np.ndarray] = {}
         self.length: dict[int, int] = {}
         self.x: dict[int, np.ndarray] = {}
+        # Onset sample of each word of a run in this condition's timeline, in story order,
+        # and the word's index into the flat word-feature arrays.
+        self.word_onset: dict[int, np.ndarray] = {}
+        self.word_flat: dict[int, np.ndarray] = {}
         for r in self.runs:
             env = np.load(self.cd / f"env_r{r:02d}.npy")
             n = min([len(env)] + [np.load(self.cd / f"s{s:02d}_r{r:02d}.npy", mmap_mode="r").shape[0]
@@ -201,6 +233,10 @@ class Design:
                 order = order[::-1]
             idx = np.round(w.onsets * FS).astype(int)
             sel = np.nonzero(run_of == r)[0][order]
+            fwd = np.empty(len(order), dtype=int)
+            fwd[order] = idx
+            self.word_onset[r] = fwd
+            self.word_flat[r] = np.nonzero(run_of == r)[0]
             stim = {"env": env[:n], "onset": ft.impulse_train(n, idx)}
             for name, v in word_feats.items():
                 stim[name] = ft.impulse_train(n, idx, v[sel])
@@ -214,6 +250,12 @@ class Design:
     def cols(self, tier: str) -> np.ndarray:
         feats = [i for name in ft.TIERS[tier] if name in self.width for i in self.feature_index(name)]
         return np.array([f * self.count + j for f in feats for j in range(self.count)])
+
+    def kernel(self, w: np.ndarray, tier: str, names: tuple[str, ...]) -> np.ndarray:
+        """(F, L, C) slice of a tier's weights ``w`` for word features ``names``, in order."""
+        tier_feats = [i for name in ft.TIERS[tier] if name in self.width for i in self.feature_index(name)]
+        rows = [tier_feats.index(i) for name in names for i in self.feature_index(name)]
+        return w.reshape(len(tier_feats), self.count, -1)[rows]
 
     def eeg(self, s: int, r: int, keep: bool = False) -> np.ndarray:
         """EEG of subject s, run r, cut to the run's shared length; ``keep`` memoises it."""
@@ -275,9 +317,184 @@ def decode_subject(design: Design, s: int, test_runs: list[int], preds: dict[int
             "hits10": int((ranks <= 10).sum())}
 
 
+def window_slots(design: Design, r: int, start: int, win: int) -> np.ndarray:
+    """Story-order positions (within run ``r``) of the words whose onset falls in the window."""
+    on = design.word_onset[r]
+    pos = np.nonzero((on >= start) & (on < start + win))[0]
+    if len(pos) and not np.array_equal(pos, np.arange(pos[0], pos[-1] + 1)):
+        raise ValueError(f"run {r}: window words at {start} are not contiguous in the story")
+    return pos
+
+
+def distract(root: Path, condition: str, subjects: list[int], lm_path: Path, train_runs: list[int],
+             test_runs: list[int], win_s: float, n_distractors: int, layer: int, top_p: float,
+             basis_pcs: int = 64) -> Path:
+    """GPT-2 distractors for every test-run window of a condition (see semmn.eeg.distractors).
+
+    Embeddings are stored as coordinates in a ``basis_pcs``-component PCA basis fitted on
+    training-run words, which reproduces any smaller training PCA exactly. The true words
+    are also re-scored through the sampler's forced path, as a check on the one-pass
+    features.
+    """
+    from semmn.eeg import distractors as ds
+
+    out = root / "cache" / f"distractors_{condition}_w{win_s:g}_k{n_distractors}_p{top_p:g}_l{layer}.npz"
+    if out.exists():
+        return out
+    torch_threads()
+    t0 = time.time()
+    design = Design(root, condition, subjects, lm_path, train_runs, n_pcs=0)
+    z = np.load(lm_path)
+    tr = np.isin(z["run"], train_runs)
+    basis = lm.Pca.fit(z["embedding"][tr], basis_pcs)
+    words = story_words(root)
+    model, tok = lm.load_gpt2(GPT2_NAME)
+    vocab_story = {w.lower() for r in words for w in words[r].words}
+    function_words = ds.FUNCTION_WORDS - vocab_story
+    strings = [tok.decode([i]) for i in range(len(tok))]
+    start_mask, cont_mask = ds.content_masks(strings, function_words)
+    period_ids = tok.encode(".")
+    win = int(win_s * FS)
+    rec: dict[str, list] = {k: [] for k in ("run", "start", "lo", "hi")}
+    cand_sur, cand_emb, cand_words, true_dsur, true_demb = [], [], [], [], []
+    for r in [r for r in test_runs if r in design.runs]:
+        flags = z["sentence_final"][design.word_flat[r]].astype(bool)
+        units, owner = lm.run_units(words[r].words, tok.encode, flags)
+        first_unit = {o: u for u, o in enumerate(owner) if o >= 0}
+        for st in decode.window_starts(design.length[r], win):
+            pos = window_slots(design, r, int(st), win)
+            if len(pos) == 0:
+                continue
+            prefix = [lm.GPT2_BOS] + [t for u in units[: first_unit[int(pos[0])]] for t in u]
+            slot_flags = flags[pos]
+            seed = (1 if condition == "reverse" else 0) * 10**7 + r * 10**5 + int(st)
+            g = ds.sample_window(model, prefix, slot_flags, period_ids, layer, start_mask, cont_mask,
+                                 k=n_distractors, seed=seed, top_p=top_p)
+            f = ds.sample_window(model, prefix, slot_flags, period_ids, layer,
+                                 forced=[units[first_unit[int(q)]] for q in pos])
+            flat = design.word_flat[r][pos]
+            true_dsur.append(np.abs(f["surprisal"][0] - z["surprisal"][flat]).max())
+            true_demb.append(np.abs(f["hidden"][0] - z["embedding"][flat]).max())
+            rec["run"].append(r)
+            rec["start"].append(int(st))
+            rec["lo"].append(int(flat[0]))
+            rec["hi"].append(int(flat[-1]) + 1)
+            cand_sur.append(g["surprisal"])
+            k, m, h = g["hidden"].shape
+            cand_emb.append(((g["hidden"].reshape(k * m, h) - basis.mean) @ basis.components.T).reshape(k, m, -1))
+            cand_words.append(["|".join(tok.decode(t).strip() for t in seq) for seq in g["tokens"]])
+        log(f"{condition} distractors: run {r} done ({len(rec['run'])} windows, {time.time() - t0:.0f}s)")
+    save_distractors(out, rec, cand_sur, cand_emb, basis, win, train_runs,
+                     cand_words=np.array(cand_words, dtype=object), true_forced_max_dsur=np.array(true_dsur),
+                     true_forced_max_demb=np.array(true_demb))
+    log(f"{condition} distractors: {len(rec['run'])} windows x {n_distractors}; forced-path check on the "
+        f"true words: max |d surprisal| {max(true_dsur):.2g} bits, max |d state| {max(true_demb):.2g} "
+        f"({time.time() - t0:.0f}s)")
+    return out
+
+
+def save_distractors(out: Path, rec: dict[str, list], cand_sur: list[np.ndarray], cand_coords: list[np.ndarray],
+                     basis: lm.Pca, win: int, train_runs: list[int], **extra) -> None:
+    """Write distractor windows: ``rec`` holds run, start, lo, hi per window; the candidate
+    arrays are (K, m) surprisal and (K, m, B) basis coordinates per window."""
+    ptr = np.concatenate([[0], np.cumsum([c.shape[1] for c in cand_sur])])
+    np.savez(out, run=np.array(rec["run"]), start=np.array(rec["start"]), lo=np.array(rec["lo"]),
+             hi=np.array(rec["hi"]), ptr=ptr, win=win, cand_surprisal=np.concatenate(cand_sur, axis=1),
+             cand_coords=np.concatenate(cand_coords, axis=1).astype(np.float32),
+             basis_mean=basis.mean, basis_components=basis.components, train_runs=np.array(train_runs), **extra)
+
+
+def load_distractors(path: Path, design: Design, condition: str) -> dict:
+    """Distractor windows with their word features put through the design's transforms."""
+    z = np.load(path, allow_pickle=True)
+    names = tuple(n for n in ("surprisal", "embedding") if n in design.transform)
+    if "embedding" in names:
+        k = design.pca.components.shape[0]
+        if not np.allclose(design.pca.components, z["basis_components"][:k], atol=1e-6):
+            raise ValueError("the distractor PCA basis does not match this design's training PCA")
+    windows = []
+    for i in range(len(z["run"])):
+        r, st = int(z["run"][i]), int(z["start"][i])
+        pos = window_slots(design, r, st, int(z["win"]))
+        flat = design.word_flat[r][pos]
+        if len(flat) == 0 or flat[0] != z["lo"][i] or flat[-1] + 1 != z["hi"][i]:
+            raise ValueError(f"{condition}: distractor window run {r} at {st} does not match the design")
+        sl = slice(int(z["ptr"][i]), int(z["ptr"][i + 1]))
+        cand, true = {}, {}
+        for n in names:
+            if n == "surprisal":
+                raw = z["cand_surprisal"][:, sl]
+            else:
+                raw = z["basis_mean"] + z["cand_coords"][:, sl].astype(np.float64) @ z["basis_components"]
+            cand[n] = design.transform[n](raw)
+            true[n] = design.word_values[n][flat]
+        # Prior-only score: the window's GPT-2 log-probability (minus total surprisal).
+        prior = np.concatenate([[-design.raw_surprisal[flat].sum()], -z["cand_surprisal"][:, sl].sum(axis=1)])
+        windows.append({"run": r, "start": st, "onsets": design.word_onset[r][pos],
+                        "true": true, "cand": cand, "prior": prior})
+    return {"names": names, "win": int(z["win"]), "windows": windows, "n_cand": int(z["cand_surprisal"].shape[0]) + 1}
+
+
+def decode_distractors(design: Design, subjects: list[int], dis: dict, names: tuple[str, ...],
+                       preds: dict[int, np.ndarray], kern: np.ndarray, chans: np.ndarray,
+                       rng: np.random.Generator, n_shuffles: int) -> dict[int, dict]:
+    """Rank each window's true words against its GPT-2 distractors, per held-out subject.
+
+    Candidates differ only in the word features ``names`` (those the tier uses), and
+    their predictions do not depend on the subject, so each window's candidates are
+    built once and scored for every subject. Three rankers on the same candidates: the
+    subject's EEG; another window's EEG of the same subject (``n_shuffles``
+    derangements: the authorship control, which must sit at chance); the GPT-2 prior.
+    """
+    from semmn.eeg import candidates as cd
+
+    win = dis["win"]
+    wins = [w for w in dis["windows"] if w["run"] in preds]
+    n = len(wins)
+    # Observed windows z-scored once per subject: (n_windows, win * channels).
+    zobs = {s: decode._zscore_time(np.stack([design.eeg(s, w["run"], keep=True)[w["start"] : w["start"] + win, chans]
+                                             for w in wins])).reshape(n, -1) for s in subjects}
+    perms = {s: np.array([cd.derangement(n, rng) for _ in range(n_shuffles)]) for s in subjects}
+    ranks = {s: np.zeros(n, dtype=int) for s in subjects}
+    shuf = {s: np.zeros((n_shuffles, n), dtype=int) for s in subjects}
+    prior = np.zeros(n, dtype=int)
+    k = kern[:, :, chans]
+    for i, w in enumerate(wins):
+        st = w["start"]
+        true = np.concatenate([w["true"][nm] for nm in names], axis=-1)
+        cand = np.concatenate([w["cand"][nm] for nm in names], axis=-1)
+        cp = cd.candidate_predictions(preds[w["run"]][st : st + win, chans], w["onsets"], true, cand,
+                                      k, design.first, st)
+        zc = decode._zscore_time(cp).reshape(len(cp), -1)
+        prior[i] = cd.rank_of_truth(w["prior"])
+        for s in subjects:
+            rows = np.concatenate([[i], perms[s][:, i]])  # own window, then the shuffled ones
+            sc = zobs[s][rows] @ zc.T / zc.shape[1]
+            rk = np.array([cd.rank_of_truth(x) for x in sc])
+            ranks[s][i], shuf[s][:, i] = rk[0], rk[1:]
+    out = {}
+    for s in subjects:
+        r = ranks[s]
+        out[s] = {"n_candidates": dis["n_cand"], "n_windows": len(r), "top1": decode.topk(r, 1),
+                  "top10": decode.topk(r, 10), "hits1": int((r <= 1).sum()), "hits10": int((r <= 10).sum()),
+                  "median_rank": float(np.median(r)), "shuffled_top1": float(np.mean(shuf[s] <= 1)),
+                  "shuffled_top10": float(np.mean(shuf[s] <= 10)), "prior_top1": decode.topk(prior, 1),
+                  "prior_top10": decode.topk(prior, 10)}
+    return out
+
+
 def encode(root: Path, condition: str, subjects: list[int], train_runs: list[int], test_runs: list[int],
            n_folds: int, lm_path: Path, n_pcs: int, out: Path, windows: list[float],
-           tiers: list[str]) -> None:
+           tiers: list[str], main_tier: str = "C_env_onset_lm", distractor_path: Path | None = None,
+           n_shuffles: int = 20) -> None:
+    """Held-out-subject encoding and decoding for every tier and montage.
+
+    ``main_tier`` picks the best-k channels and the N400 kernels and is the tier the
+    summary tests against tier B. With ``distractor_path`` (from the distract stage),
+    the word-feature tiers also rank each window's true words against GPT-2 distractors.
+    """
+    if main_tier not in tiers:
+        raise ValueError(f"main tier {main_tier} is not among the tiers run")
     t0 = time.time()
     design = Design(root, condition, subjects, lm_path, train_runs, n_pcs)
     train_runs = [r for r in train_runs if r in design.runs]
@@ -290,14 +507,15 @@ def encode(root: Path, condition: str, subjects: list[int], train_runs: list[int
     s_test = {s: trf.sum_stats(stats[s][r] for r in test_runs) for s in subjects}
     rng = np.random.default_rng(0)
 
-    rows, dec_rows, chan_r, chosen = [], [], [], []
+    dis = load_distractors(distractor_path, design, condition) if distractor_path else None
+    rows, dec_rows, dis_rows, chan_r, chosen = [], [], [], [], []
     alpha_c: dict[int, float] = {}
     for fold, (tr_subs, te_subs) in enumerate(trf.subject_folds(subjects, n_folds, seed=0)):
         curves = {}
         for tier in tiers:
             cols = design.cols(tier)
             curves[tier] = trf.inner_loso_curve({s: s_train[s].select(cols) for s in tr_subs}, ALPHAS)
-        sets = montage_sets(curves["C_env_onset_lm"] if "C_env_onset_lm" in curves else curves[tiers[-1]])
+        sets = montage_sets(curves[main_tier])
         chosen.append({"fold": fold, "train": tr_subs, "test": te_subs,
                        "best8": sets["best8_train"].tolist(), "best16": sets["best16_train"].tolist()})
         for tier in tiers:
@@ -310,13 +528,20 @@ def encode(root: Path, condition: str, subjects: list[int], train_runs: list[int
                 w = path.weights(alpha)
                 if alpha not in pred_cache:  # predictions depend on the stimulus, not the subject
                     pred_cache[alpha] = {r: trf.predict(design.x[r][:, cols], w, pooled) for r in test_runs}
+                names = tuple(n for n in dis["names"] if n in ft.TIERS[tier]) if dis is not None else ()
+                if names:
+                    res = decode_distractors(design, te_subs, dis, names, pred_cache[alpha],
+                                             design.kernel(w, tier, names), chans, rng, n_shuffles)
+                    for s in te_subs:
+                        dis_rows.append({"condition": condition, "fold": fold, "subject": s, "tier": tier,
+                                         "montage": mname, **res[s]})
                 for s in te_subs:
                     r = trf.corr_from_stats(w, s_test[s].select(cols))
                     rows.append({"condition": condition, "fold": fold, "subject": s, "tier": tier,
                                  "montage": mname, "alpha": alpha, "mean_r": float(r[chans].mean())})
                     if mname == "biosemi128":
                         chan_r.append({"tier": tier, "subject": s, "r": r.tolist()})
-                        if tier == "C_env_onset_lm":
+                        if tier == main_tier:
                             alpha_c[s] = alpha
                     for win_s in windows:
                         d = decode_subject(design, s, test_runs, pred_cache[alpha], chans, win_s, rng)
@@ -326,13 +551,17 @@ def encode(root: Path, condition: str, subjects: list[int], train_runs: list[int
 
     out.mkdir(parents=True, exist_ok=True)
     tag = f"{condition}"
-    if "C_env_onset_lm" in tiers and alpha_c:
+    # The N400 kernels index the full design, so they need a main tier that uses all of it.
+    if alpha_c and len(design.cols(main_tier)) == design.x[design.runs[0]].shape[1]:
         _write_csv(out / f"n400_trf_per_subject_{tag}.csv", n400_kernels(design, stats, alpha_c, condition))
     _write_csv(out / f"encoding_per_subject_{tag}.csv", rows)
     _write_csv(out / f"decoding_per_subject_{tag}.csv", dec_rows)
+    if dis_rows:
+        _write_csv(out / f"distractor_per_subject_{tag}.csv", dis_rows)
     (out / f"folds_{tag}.json").write_text(json.dumps(
         {"subjects": subjects, "train_runs": train_runs, "test_runs": test_runs, "alphas": ALPHAS,
-         "band_hz": BAND, "fs": FS, "n_pcs": n_pcs, "lm": lm_path.name, "folds": chosen}, indent=1))
+         "band_hz": BAND, "fs": FS, "n_pcs": n_pcs, "lm": lm_path.name, "main_tier": main_tier,
+         "distractors": distractor_path.name if distractor_path else None, "folds": chosen}, indent=1))
     _write_scalp(out / f"scalp_{tag}.md", chan_r)
     log(f"{condition}: wrote tables to {out.name}/ ({time.time() - t0:.0f}s)")
 
@@ -341,7 +570,7 @@ def n400_kernels(design: Design, stats: dict[int, dict[int, trf.Stats]], alpha: 
                  condition: str) -> list[dict]:
     """N400 check on continuous speech (the source paper's analysis).
 
-    Per subject, fit the tier-C TRF on all of that subject's runs (alpha: the one chosen
+    Per subject, fit the full-design (main-tier) TRF on all of that subject's runs (alpha: the one chosen
     without that subject, in its held-out fold) and average each word feature's kernel
     over 300-500 ms and the montage's pre-registered centro-parietal region. A negative
     value is an N400-like response to less predictable (or more dissimilar) words.
@@ -570,7 +799,20 @@ def main() -> None:
     p.add_argument("--pcs", type=int, default=20)
     p.add_argument("--windows", default="5,10")
     p.add_argument("--tiers", default="A_env,B_env_onset,C_env_onset_lm,L_onset_lm")
+    p.add_argument("--main-tier", default="C_env_onset_lm", help="tier for best-k, N400 and the gain test")
+    p.add_argument("--distractors", type=Path, default=None, help=".npz from the distract stage")
+    p.add_argument("--shuffles", type=int, default=20, help="shuffled-EEG derangements per subject")
     p.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "outputs" / "eeg")
+    p = sub.add_parser("distract")
+    p.add_argument("--condition", choices=list(CONDITIONS), default="forward")
+    p.add_argument("--subjects", default="1-8", help="subjects whose run lengths define the windows")
+    p.add_argument("--lm", type=Path, required=True, help="GPT-2 word-feature .npz from the words stage")
+    p.add_argument("--train-runs", default="1-15")
+    p.add_argument("--test-runs", default="16-20")
+    p.add_argument("--window", type=float, default=10.0)
+    p.add_argument("--distractors", type=int, default=88)
+    p.add_argument("--layer", type=int, default=6)
+    p.add_argument("--top-p", type=float, default=0.9)
     p = sub.add_parser("summarize")
     p.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "outputs" / "eeg")
     a = ap.parse_args()
@@ -584,9 +826,13 @@ def main() -> None:
         prep(root, a.condition, parse_ints(a.subjects))
     elif a.stage == "words":
         print(words_stage(root, a.backend, a.layer))
+    elif a.stage == "distract":
+        print(distract(root, a.condition, parse_ints(a.subjects), a.lm, parse_ints(a.train_runs),
+                       parse_ints(a.test_runs), a.window, a.distractors, a.layer, a.top_p))
     else:
         encode(root, a.condition, parse_ints(a.subjects), parse_ints(a.train_runs), parse_ints(a.test_runs),
-               a.folds, a.lm, a.pcs, a.out, [float(w) for w in a.windows.split(",")], a.tiers.split(","))
+               a.folds, a.lm, a.pcs, a.out, [float(w) for w in a.windows.split(",")], a.tiers.split(","),
+               a.main_tier, a.distractors, a.shuffles)
 
 
 if __name__ == "__main__":
