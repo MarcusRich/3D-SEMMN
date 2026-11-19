@@ -109,3 +109,13 @@ def test_stdp_update_changes_weights_and_reports_the_change() -> None:
     assert applied > 0.0
     assert not torch.equal(before, conn.edge_weights)
     assert math.isclose(applied, (conn.edge_weights - before).abs().mean().item(), rel_tol=1e-5)
+
+
+def test_stdp_interval_zero_turns_stdp_off() -> None:
+    # The old schedule was `step % stdp_interval`, which raised on 0.
+    cfg = ConnectivityConfig(stdp_interval=0)
+    assert not any(cfg.stdp_due(step) for step in range(1, 50))
+    cfg = ConnectivityConfig(stdp_interval=10)
+    assert [step for step in range(1, 31) if cfg.stdp_due(step)] == [10, 20, 30]
+    cfg.enabled = False  # lesioned: STDP would be a no-op, so it is not scheduled
+    assert not cfg.stdp_due(10)

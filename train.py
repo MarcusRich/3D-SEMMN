@@ -111,7 +111,7 @@ def run(
             scaler.update()
 
             global_step += 1
-            if global_step % cfg.connectivity.stdp_interval == 0:
+            if cfg.connectivity.stdp_due(global_step):
                 model.apply_stdp(outputs["pre_activity"], outputs["post_activity"])
 
             if step % cfg.training.log_interval == 0:

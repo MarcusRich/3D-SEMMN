@@ -28,7 +28,15 @@ class ColumnarDynamics(nn.Module):
         # message is one pooled scalar per column broadcast across channels, so
         # adding it before the norm is removed exactly by mean subtraction and
         # the connectivity would have no effect (and no gradient) at init.
-        local = self.norm(intra + self.bias.unsqueeze(0))
+        #
+        # The per-column bias is added after the norm, not inside it. Measured: with
+        # the bias inside, training halved the hub's spread across inputs even with
+        # the flat hub read-out; after the norm, the spread stays near its init level
+        # (tests/test_hub_variance.py). Likely reason, not isolated: Adam moves the
+        # bias by about lr per step whatever its gradient, while `intra` starts small
+        # (U, V ~ 0.05), so inside the norm the bias can come to dominate the
+        # denominator. After the norm, the bias still gives each column its offset.
+        local = self.norm(intra) + self.bias.unsqueeze(0)
         return torch.tanh(local + inter_messages)
 
 

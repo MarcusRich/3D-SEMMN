@@ -32,6 +32,10 @@ class ModelConfig:
     # Encoder features as two extra attention tokens in the hub (bypasses the grid).
     # Off: the hub reads only its columns, so it depends on inter-column connectivity.
     hub_modality_tokens: bool = False
+    # How the hub columns become the classifier's latent. "flat": all hub column
+    # states, standardised per feature across the batch (BatchNorm), then linear.
+    # "mean": the P1 attention mean-pool, which loses the label (see the P2 notes).
+    hub_readout: str = "flat"
 
 
 @dataclass
@@ -49,10 +53,17 @@ class ConnectivityConfig:
     min_weight: float = 0.0
     max_weight: float = 1.5
     init_weight_scale: float = 0.15
-    # Optimizer steps between STDP updates (train.py and eval_small.py).
+    # Optimizer steps between STDP updates (train.py and eval_small.py); 0 turns STDP
+    # off. At the eval-small scale STDP is negligible (see the P2 notes): over a run
+    # it changes each edge by about 1% of its weight, about 6% of what the optimizer
+    # moves it, and val accuracy with it off is within the seed-to-seed spread.
     stdp_interval: int = 100
     stdp_lr: float = 0.01
     anti_hebbian: float = 0.05
+
+    def stdp_due(self, step: int) -> bool:
+        """Whether STDP runs after optimizer step `step` (counted from 1)."""
+        return self.enabled and self.stdp_interval > 0 and step % self.stdp_interval == 0
 
 
 @dataclass

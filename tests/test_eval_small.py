@@ -54,6 +54,8 @@ def test_end_to_end_smoke(tmp_path: Path) -> None:
         "semmn_lesion_test",
         "semmn_lesion_train",
         "semmn_hub_probe",
+        "semmn_init_hub_probe",
+        "semmn_mean_readout",
         "semmn_lesion_test_hub_probe",
         "semmn_lesion_train_hub_probe",
         "semmn_hub_tokens",
@@ -67,5 +69,6 @@ def test_end_to_end_smoke(tmp_path: Path) -> None:
     assert all(0.0 <= r["test_accuracy"] <= 1.0 for r in rows)
     table = (tmp_path / "out" / "results.md").read_text(encoding="utf-8")
     assert "| semmn | 2 |" in table
+    assert "val accuracy, selected epoch" in table
     assert "| logreg | 1 |" in table
     assert (tmp_path / "out" / "results.csv").exists()

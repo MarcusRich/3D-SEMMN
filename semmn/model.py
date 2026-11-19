@@ -60,6 +60,8 @@ class SEMMNModel(nn.Module):
             attention_heads=config.model.attention_heads,
             direct_fusion=config.model.hub_direct_fusion,
             modality_tokens=config.model.hub_modality_tokens,
+            num_hub_columns=int(self.grid.hub_columns.numel()),
+            readout=config.model.hub_readout,
         )
 
         self.vision_proj = nn.Linear(config.model.vision_feature_dim, config.model.latent_dim)
