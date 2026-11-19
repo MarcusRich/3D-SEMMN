@@ -56,7 +56,10 @@ python train.py --config config/default.yaml --device cuda
 ```
 
 Generate figures. No checkpoint is committed: `outputs/best.pt` is written by
-`train.py` (the epoch with the best validation accuracy), so train first:
+`train.py` (the epoch with the best validation accuracy), and so is
+`outputs/history.json`. Train first. The pictures under `outputs/figures/` are
+from an early prototype run with only a handful of inter-column edges, not from
+`outputs/eval-small/` or the EEG tables:
 
 ```bash
 python train.py --config config/light.yaml --device cpu   # writes outputs/best.pt
@@ -95,8 +98,15 @@ python -I eeg_p3.py summarize
 ```
 
 `words --backend local` reads the static embedding table of a locally cached
-all-MiniLM-L6-v2 from the Hugging Face cache. `--backend gpt2` needs `transformers`.
+all-MiniLM-L6-v2 from the Hugging Face cache and does not use the network.
+`--backend gpt2` needs `transformers` and also reads only the local cache, unless
+you pass `--download` (that flag is what allows Hugging Face hub access).
 The release lists content words only, so neither backend sees the full transcript.
+
+Encoding and segment identification are leave-subject-out on held-out runs. The
+N400 kernel table is a within-subject fit on all of that subject's runs; only its
+ridge alpha was chosen without the subject. The p-values in `summary.md` are not
+corrected for the number of montages or features.
 
 ## Config Notes
 
@@ -109,6 +119,11 @@ The release lists content words only, so neither backend sees the full transcrip
   - `model.hub_modality_tokens: true` (encoder features as two extra hub tokens; off by default)
   - `model.hub_readout: mean` (the earlier read-out: self-attention over the hub columns, mean-pooled;
     it loses the label, see the P2 notes)
+- `training.dataset_source: hf` loads BLOSSOM-framework/AV-MNIST and contacts the Hugging Face
+  hub. If that load fails, training stops. `training.allow_synthetic_fallback: true` is the
+  explicit opt-in that continues on the synthetic audio instead, with a warning.
+- `connectivity.intra_density_boost` is accepted and ignored. Intra-column dynamics are dense
+  low-rank factors, not a sampled graph.
 - Synthetic audio (`data`): a tone whose pitch encodes the digit, with per-sample pitch jitter
   (`audio_pitch_jitter`) and white noise (`audio_snr_db`), so audio alone is informative but
   does not determine the label

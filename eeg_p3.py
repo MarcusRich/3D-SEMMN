@@ -110,15 +110,19 @@ def story_sentences(root: Path) -> dict[int, np.ndarray]:
 
 
 def minilm_snapshot() -> Path:
-    """The locally cached all-MiniLM-L6-v2 snapshot (read only; nothing is downloaded)."""
+    """The locally cached all-MiniLM-L6-v2 snapshot (read only; nothing is downloaded).
+
+    When several snapshots are cached, the most recently modified one is used.
+    Lexicographic order of the snapshot hashes is not recency.
+    """
     hub = Path(os.environ.get("HF_HUB_CACHE", Path.home() / ".cache" / "huggingface" / "hub"))
-    snaps = sorted((hub / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots").glob("*"))
+    snaps = list((hub / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots").glob("*"))
     if not snaps:
         raise FileNotFoundError("all-MiniLM-L6-v2 is not in the local Hugging Face cache")
-    return snaps[-1]
+    return max(snaps, key=lambda p: p.stat().st_mtime)
 
 
-def words_stage(root: Path, backend: str, layer: int) -> Path:
+def words_stage(root: Path, backend: str, layer: int, download: bool = False) -> Path:
     """Per-word features for the whole story, in run order.
 
     The release lists content words only (``wordVec``), not the full transcript.
@@ -128,7 +132,8 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
     Broderick et al.'s semantic dissimilarity from those vectors. No network forward pass.
     ``gpt2``: GPT-2 small surprisal and layer-``layer`` states (needs transformers). It is
     fed the content-word stream, which is off-distribution for GPT-2; the full transcript
-    is not part of the release.
+    is not part of the release. The model is read from the local Hugging Face cache unless
+    ``download`` is true.
     """
     words = story_words(root)
     run_of = np.concatenate([[r] * len(words[r]) for r in sorted(words)])
@@ -138,7 +143,8 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
         sur = lm.ngram_surprisal({r: words[r].words for r in words})
         snap = minilm_snapshot()
         table = lm.read_safetensors(snap / "model.safetensors", "embeddings.word_embeddings.weight")
-        vocab = {t.rstrip("\n"): i for i, t in enumerate((snap / "vocab.txt").open())}
+        with (snap / "vocab.txt").open(encoding="utf-8") as fh:
+            vocab = {t.rstrip("\r\n"): i for i, t in enumerate(fh)}
         vec = lm.static_word_vectors(flat, table, vocab)
         sent = story_sentences(root)
         dis = lm.semantic_dissimilarity(vec, np.concatenate([sent[r] for r in sorted(words)]))
@@ -153,7 +159,9 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
 
     torch.set_num_threads(4)
     log("GPT-2 is fed the content-word stream only (no function words): off-distribution input")
-    model, tok = lm.load_gpt2("gpt2")
+    if download:
+        log("GPT-2 download is enabled; from_pretrained may contact the Hugging Face hub")
+    model, tok = lm.load_gpt2("gpt2", local_files_only=not download)
     surprisal, emb = lm.gpt2_word_features(flat, model, tok.encode, layer=layer)
     np.savez(out, surprisal=surprisal, embedding=emb.astype(np.float32), run=run_of)
     log(f"GPT-2 features: {len(flat)} words, layer {layer}")
@@ -178,7 +186,7 @@ class Design:
         for name in ("surprisal", "dissimilarity"):
             if name in z.files:
                 v = z[name]
-                word_feats[name] = ((v - v[tr].mean()) / v[tr].std())[:, None]
+                word_feats[name] = ft.zscore_with_train(v, v[tr])[:, None]
         if "embedding" in z.files and n_pcs > 0:
             word_feats["embedding"] = lm.Pca.fit(z["embedding"][tr], n_pcs).transform(z["embedding"])
         self.width = {"env": 1, "onset": 1, **{k: v.shape[1] for k, v in word_feats.items()}}
@@ -351,6 +359,14 @@ def n400_kernels(design: Design, stats: dict[int, dict[int, trf.Stats]], alpha: 
     rois = {"biosemi128": mt.n400_roi_128(mt.biosemi_positions())}
     rois.update({m: mt.n400_roi_indices(m) for m in mt.N400_ROI_1020})
     lags = np.arange(int(round(0.3 * FS)) - design.first, int(round(0.5 * FS)) - design.first + 1)
+    # Alpha was chosen for tier C. Applying it to a wider design changes the penalty
+    # scale (trace(Cxx) / P), so refuse that instead of fitting a different model.
+    expected = len(design.cols("C_env_onset_lm"))
+    got = next(iter(next(iter(stats.values())).values())).xtx.shape[0]
+    if got != expected:
+        raise ValueError(
+            f"N400 alpha was chosen for tier C ({expected} columns) but the design has {got}"
+        )
     rows = []
     for s, a in sorted(alpha.items()):
         w = trf.fit_ridge(trf.sum_stats(stats[s].values()), a)
@@ -431,8 +447,16 @@ def _per_subject(rows: list[dict], key: str, **match: str) -> dict[int, float]:
 
 def summarize(out: Path) -> None:
     """Write summary.md from the per-subject tables in ``out``."""
-    lines = ["# P3 summary tables (held-out subjects, held-out runs)", "",
-             "Tier L is word timing plus word features (it keeps the onset regressor), not semantics alone.", ""]
+    lines = [
+        "# P3 summary tables",
+        "",
+        "Encoding and segment identification use held-out subjects and held-out runs.",
+        "The N400 kernels do not: each is fit on all of that subject's runs, and only the",
+        "ridge alpha was chosen without that subject. Tier L is word timing plus word",
+        "features (it keeps the onset regressor), not semantics alone. Reported p-values",
+        "are not corrected for the number of montages or features.",
+        "",
+    ]
     gains: dict[str, dict[str, np.ndarray]] = {}
     kernels: dict[str, list[dict]] = {}
     for cond in CONDITIONS:
@@ -471,7 +495,11 @@ def summarize(out: Path) -> None:
 
             n4 = _read_csv(n4_path)
             kernels[cond] = n4
-            lines += [f"### {cond}: N400 check, word-feature TRF kernel at 300-500 ms, centro-parietal region", "",
+            lines += [f"### {cond}: N400 check, word-feature TRF kernel at 300-500 ms, centro-parietal region",
+                      "",
+                      "Within-subject fit on every run of that subject (not the held-out runs). "
+                      "A negative kernel is the N400 direction.",
+                      "",
                       "| feature | montage | ROI channels | mean kernel | subjects negative | dz | t | p |",
                       "| --- | --- | --- | --- | --- | --- | --- | --- |"]
             for feat in dict.fromkeys(r["feature"] for r in n4):
@@ -560,6 +588,9 @@ def main() -> None:
     p = sub.add_parser("words")
     p.add_argument("--backend", choices=["local", "gpt2"], default="local")
     p.add_argument("--layer", type=int, default=6)
+    p.add_argument("--download", action="store_true",
+                   help="allow the gpt2 backend to download model files from the Hugging Face hub; "
+                        "by default only the local cache is read")
     p = sub.add_parser("encode")
     p.add_argument("--condition", choices=list(CONDITIONS), default="forward")
     p.add_argument("--subjects", default="1-8")
@@ -583,7 +614,7 @@ def main() -> None:
     if a.stage == "prep":
         prep(root, a.condition, parse_ints(a.subjects))
     elif a.stage == "words":
-        print(words_stage(root, a.backend, a.layer))
+        print(words_stage(root, a.backend, a.layer, download=a.download))
     else:
         encode(root, a.condition, parse_ints(a.subjects), parse_ints(a.train_runs), parse_ints(a.test_runs),
                a.folds, a.lm, a.pcs, a.out, [float(w) for w in a.windows.split(",")], a.tiers.split(","))

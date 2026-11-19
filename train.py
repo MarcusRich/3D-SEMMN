@@ -156,7 +156,7 @@ def run(
     torch.save({"model": model.state_dict()}, out_dir / "last.pt")
 
     # Score the selected checkpoint on test exactly once.
-    best = torch.load(out_dir / "best.pt", map_location=device)
+    best = torch.load(out_dir / "best.pt", map_location=device, weights_only=True)
     model.load_state_dict(best["model"])
     test_metrics = evaluate(model, test_loader, cfg, device, max_batches=len(test_loader))
     history.append(

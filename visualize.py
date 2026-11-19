@@ -480,7 +480,7 @@ def main() -> None:
     device = torch.device(use_device)
     model = SEMMNModel(cfg).to(device)
 
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=True)
     model_state = model.state_dict()
     incoming = ckpt["model"]
     filtered = {

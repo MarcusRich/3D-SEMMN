@@ -97,6 +97,25 @@ def test_time_reversed_words():
     np.testing.assert_allclose(r.offsets, [7.0, 9.0])
 
 
+def test_short_recordings_keep_the_channel_axis(tmp_path):
+    # 40 samples is shorter than 128 channels. Inferring the channel axis from
+    # which side is longer transposed this into 128 time points of 40 channels.
+    n = 40
+    eeg = np.arange(n * 128, dtype=float).reshape(n, 128)
+    mast = np.arange(n * 2, dtype=float).reshape(n, 2)
+    sio.savemat(tmp_path / "time_major.mat", {"eegData": eeg, "mastoids": mast, "fs": 128})
+    sio.savemat(tmp_path / "channel_major.mat", {"eegData": eeg.T, "mastoids": mast.T, "fs": 128})
+    a, ma, fs = br.load_eeg_run(tmp_path / "time_major.mat")
+    b, mb, _ = br.load_eeg_run(tmp_path / "channel_major.mat")
+    assert a.shape == (n, 128) and ma.shape == (n, 2) and fs == 128
+    np.testing.assert_array_equal(b, a)
+    np.testing.assert_array_equal(mb, ma)
+    square = tmp_path / "square.mat"
+    sio.savemat(square, {"eegData": np.zeros((128, 128)), "mastoids": np.zeros((128, 2)), "fs": 128})
+    with pytest.raises(ValueError, match="ambiguous"):
+        br.load_eeg_run(square)
+
+
 def test_v73_files_fail_clearly(tmp_path):
     p = tmp_path / "x.mat"
     p.write_bytes(b"MATLAB 7.3 MAT-file, Platform: x" + b"\0" * 200)

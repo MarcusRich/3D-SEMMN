@@ -46,6 +46,44 @@ def test_fallback_keys_are_used_when_primary_missing() -> None:
     assert label.item() == 7
 
 
+def test_hf_source_does_not_silently_train_on_synthetic(tiny_config, monkeypatch) -> None:
+    from semmn.dataset import build_dataloaders
+
+    tiny_config.training.dataset_source = "hf"
+
+    class _Boom:
+        def __init__(self, split: str = "train") -> None:
+            raise OSError("offline")
+
+    monkeypatch.setattr("semmn.dataset.HuggingFaceAVMNIST", _Boom)
+    with pytest.raises(RuntimeError, match="synthetic"):
+        build_dataloaders(tiny_config)
+
+
+def test_unknown_dataset_source_is_rejected(tiny_config) -> None:
+    from semmn.dataset import build_dataloaders
+
+    tiny_config.training.dataset_source = "HF"
+    with pytest.raises(ValueError, match="dataset_source"):
+        build_dataloaders(tiny_config)
+
+
+def test_synthetic_fallback_is_opt_in(tiny_config, monkeypatch) -> None:
+    from semmn.dataset import build_dataloaders
+
+    tiny_config.training.dataset_source = "hf"
+    tiny_config.training.allow_synthetic_fallback = True
+
+    class _Boom:
+        def __init__(self, split: str = "train") -> None:
+            raise OSError("offline")
+
+    monkeypatch.setattr("semmn.dataset.HuggingFaceAVMNIST", _Boom)
+    with pytest.warns(UserWarning, match="synthetic"):
+        loaders = build_dataloaders(tiny_config)
+    assert loaders[2].dataset.mnist.train is False
+
+
 def test_missing_label_raises_key_error() -> None:
     with pytest.raises(KeyError, match="label"):
         _dataset([{"image": _image(), "audio": _audio()}])[0]

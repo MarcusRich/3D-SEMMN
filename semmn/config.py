@@ -49,6 +49,9 @@ class ConnectivityConfig:
     # Expected fraction of the C * (C - 1) possible directed edges (0.08 is about
     # 8 in-edges per column on a 10x10 sheet).
     inter_density: float = 0.08
+    # Accepted so older configs still load, and ignored. Intra-column dynamics are
+    # the dense low-rank factors in columns.py, not a sampled graph, so there is
+    # no intra-column edge density to boost.
     intra_density_boost: float = 2.0
     min_weight: float = 0.0
     max_weight: float = 1.5
@@ -95,7 +98,12 @@ class DataConfig:
 
 @dataclass
 class TrainingConfig:
+    # "synthetic" builds the local MNIST + tone spectrograms. "hf" loads
+    # BLOSSOM-framework/AV-MNIST, which contacts the Hugging Face hub.
     dataset_source: str = "synthetic"
+    # When False (the default), a failed "hf" load raises. True trains on synthetic
+    # audio instead, and build_dataloaders warns that it did so.
+    allow_synthetic_fallback: bool = False
     batch_size: int = 64
     epochs: int = 10
     lr: float = 1e-3
@@ -138,6 +146,11 @@ class SEMMNConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "SEMMNConfig":
+        # `eval` is read by eval_small.py, not by the model. Any other unknown key
+        # is a typo and used to be ignored, so a misspelled section silently did nothing.
+        unknown = set(raw) - _TOP_LEVEL_KEYS
+        if unknown:
+            raise ValueError(f"unknown config keys: {sorted(unknown)}")
         return cls(
             seed=raw.get("seed", 42),
             grid=_merge_dataclass(GridConfig(), raw.get("grid", {})),
@@ -152,8 +165,29 @@ class SEMMNConfig:
         )
 
 
-def _merge_dataclass(default_obj: Any, overrides: dict[str, Any]) -> Any:
+# Top-level YAML keys. `eval` belongs to eval_small.py and is not a model field.
+_TOP_LEVEL_KEYS = {
+    "seed",
+    "grid",
+    "model",
+    "connectivity",
+    "loss",
+    "data",
+    "training",
+    "paths",
+    "eval",
+}
+
+
+def _merge_dataclass(default_obj: Any, overrides: dict[str, Any] | None) -> Any:
+    if not overrides:
+        return default_obj
     current = default_obj.__dict__.copy()
+    unknown = set(overrides) - set(current)
+    if unknown:
+        raise ValueError(
+            f"unknown {type(default_obj).__name__} keys: {sorted(unknown)}"
+        )
     for key, value in overrides.items():
         if isinstance(current.get(key), tuple) and isinstance(value, list):
             current[key] = tuple(value)

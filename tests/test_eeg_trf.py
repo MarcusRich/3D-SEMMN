@@ -9,6 +9,14 @@ from semmn.eeg import features as ft
 from semmn.eeg import trf
 
 
+def test_zscore_with_train_does_not_emit_nonfinite_values():
+    v = np.array([1.0, 1.0, 3.0])
+    out = ft.zscore_with_train(v, np.array([1.0, 1.0]))
+    assert np.all(out == 0.0)
+    scaled = ft.zscore_with_train(v, np.array([0.0, 2.0]))
+    np.testing.assert_allclose(scaled, [0.0, 0.0, 2.0])
+
+
 def test_impulse_train_places_values():
     x = ft.impulse_train(10, np.array([1, 4, 4, 12]), np.array([2.0, 1.0, 3.0, 9.0]))
     assert x.shape == (10, 1)

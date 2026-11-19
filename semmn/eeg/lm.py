@@ -19,16 +19,20 @@ import numpy as np
 GPT2_BOS = 50256  # <|endoftext|>
 
 
-def load_gpt2(name: str = "gpt2"):
-    """GPT-2 small and its tokenizer from the local Hugging Face cache or hub."""
+def load_gpt2(name: str = "gpt2", *, local_files_only: bool = True):
+    """GPT-2 small and its tokenizer.
+
+    ``local_files_only`` defaults to True, so this reads the local Hugging Face cache
+    and does not contact the hub. Pass False only when a download is an explicit choice.
+    """
     try:
         from transformers import GPT2LMHeadModel, GPT2TokenizerFast
     except ImportError as exc:  # pragma: no cover - depends on the environment
         raise ImportError(
             "LM features need `transformers` (GPT-2 small). Install it in the venv, then rerun."
         ) from exc
-    tok = GPT2TokenizerFast.from_pretrained(name)
-    model = GPT2LMHeadModel.from_pretrained(name)
+    tok = GPT2TokenizerFast.from_pretrained(name, local_files_only=local_files_only)
+    model = GPT2LMHeadModel.from_pretrained(name, local_files_only=local_files_only)
     model.eval()
     return model, tok
 
@@ -207,5 +211,22 @@ def semantic_dissimilarity(vectors: np.ndarray, sentence: np.ndarray) -> np.ndar
         else:
             prev = sentence[i - 1]
             ctx = vectors[: i][sentence[:i] == prev]
-        out[i] = 1.0 - np.corrcoef(vectors[i], ctx.mean(axis=0))[0, 1]
+        out[i] = 1.0 - _pearson(vectors[i], ctx.mean(axis=0))
     return out
+
+
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson r of two vectors.
+
+    Two constant vectors have no direction; they are treated as a perfect match
+    (r = 1, dissimilarity 0). One constant vector and one that varies is a
+    mismatch (r = 0, dissimilarity 1). ``np.corrcoef`` returns NaN in both cases,
+    and a NaN feature would pass through z-scoring into the TRF.
+    """
+    a0 = np.asarray(a, dtype=np.float64) - np.mean(a)
+    b0 = np.asarray(b, dtype=np.float64) - np.mean(b)
+    da = float(np.dot(a0, a0))
+    db = float(np.dot(b0, b0))
+    if da == 0.0 or db == 0.0:
+        return 1.0 if da == 0.0 and db == 0.0 else 0.0
+    return float(np.dot(a0, b0) / np.sqrt(da * db))

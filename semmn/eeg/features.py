@@ -72,6 +72,20 @@ def lag_matrix(x: np.ndarray, first: int, count: int) -> np.ndarray:
     return out
 
 
+def zscore_with_train(values: np.ndarray, train: np.ndarray) -> np.ndarray:
+    """Z-score ``values`` using the mean and std of ``train``.
+
+    A zero or non-finite training std returns zeros. Dividing by that std would
+    turn a constant regressor into NaNs and poison the ridge fit.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    train = np.asarray(train, dtype=np.float64)
+    sd = float(train.std())
+    if not np.isfinite(sd) or sd == 0.0:
+        return np.zeros_like(values)
+    return (values - float(train.mean())) / sd
+
+
 def stimulus_matrix(features: dict[str, np.ndarray], tier: tuple[str, ...]) -> np.ndarray:
     """Stack the named per-sample features of one run into (n, F) in tier order."""
     blocks = []

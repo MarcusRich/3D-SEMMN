@@ -100,6 +100,52 @@ def test_wordpiece_and_static_vectors():
     np.testing.assert_allclose(v[0], [0, 1 / 3, 1 / 3, 1 / 3, 0, 0])
 
 
+def test_semantic_dissimilarity_stays_finite_when_correlation_is_undefined():
+    flat = np.ones((3, 4))
+    d = lm.semantic_dissimilarity(flat, np.array([0, 0, 0]))
+    assert d[0] == 0.0 and np.isfinite(d).all()
+    assert d[1] == 0.0  # two constant vectors: same shape, not a NaN
+    mixed = np.vstack([np.ones(4), np.arange(4, dtype=float)])
+    d2 = lm.semantic_dissimilarity(mixed, np.array([0, 0]))
+    assert d2[1] == 1.0  # a varying word against a constant context
+
+
+def test_load_gpt2_reads_the_local_cache_unless_download_is_requested(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class _Tok:
+        @classmethod
+        def from_pretrained(cls, name, local_files_only=False):
+            calls.append(("tok", name, local_files_only))
+            return cls()
+
+    class _Mod:
+        @classmethod
+        def from_pretrained(cls, name, local_files_only=False):
+            calls.append(("model", name, local_files_only))
+            return cls()
+
+        def eval(self):
+            return self
+
+    fake = types.ModuleType("transformers")
+    fake.GPT2TokenizerFast = _Tok
+    fake.GPT2LMHeadModel = _Mod
+    monkeypatch.setitem(sys.modules, "transformers", fake)
+
+    lm.load_gpt2("gpt2")
+    lm.load_gpt2("gpt2", local_files_only=False)
+    assert calls == [
+        ("tok", "gpt2", True),
+        ("model", "gpt2", True),
+        ("tok", "gpt2", False),
+        ("model", "gpt2", False),
+    ]
+
+
 def test_semantic_dissimilarity_uses_sentence_context():
     rng = np.random.default_rng(0)
     base = rng.standard_normal(50)

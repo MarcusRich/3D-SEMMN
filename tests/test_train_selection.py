@@ -76,7 +76,7 @@ def test_best_checkpoint_is_chosen_on_val_and_test_is_scored_once(tiny_config, t
     summary = train.run(cfg, torch.device("cpu"), tmp_path, loaders=loaders)
 
     assert calls == ["val", "val", "val", "test"]
-    best = torch.load(tmp_path / "best.pt", map_location="cpu")
+    best = torch.load(tmp_path / "best.pt", map_location="cpu", weights_only=True)
     assert best["epoch"] == 1
     assert best["selected_on"] == "val_accuracy"
     assert summary["best_epoch"] == 1

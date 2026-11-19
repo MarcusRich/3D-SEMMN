@@ -1,6 +1,10 @@
-# P3 summary tables (held-out subjects, held-out runs)
+# P3 summary tables
 
-Tier L is word timing plus word features (it keeps the onset regressor), not semantics alone.
+Encoding and segment identification use held-out subjects and held-out runs.
+The N400 kernels do not: each is fit on all of that subject's runs, and only the
+ridge alpha was chosen without that subject. Tier L is word timing plus word
+features (it keeps the onset regressor), not semantics alone. Reported p-values
+are not corrected for the number of montages or features.
 
 ## forward: encoding, mean r over the montage's channels (mean ± SEM over 19 subjects)
 
@@ -25,6 +29,8 @@ Tier L is word timing plus word features (it keeps the onset regressor), not sem
 | best16_train | +0.0049 | 17/19 | +1.18 | 7.1e-05 |
 
 ### forward: N400 check, word-feature TRF kernel at 300-500 ms, centro-parietal region
+
+Within-subject fit on every run of that subject (not the held-out runs). A negative kernel is the N400 direction.
 
 | feature | montage | ROI channels | mean kernel | subjects negative | dz | t | p |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -127,6 +133,8 @@ Negative means the montage loses against 128 channels.
 | best16_train | -0.0001 | 3/10 | -0.03 | 0.94 |
 
 ### reverse: N400 check, word-feature TRF kernel at 300-500 ms, centro-parietal region
+
+Within-subject fit on every run of that subject (not the held-out runs). A negative kernel is the N400 direction.
 
 | feature | montage | ROI channels | mean kernel | subjects negative | dz | t | p |
 | --- | --- | --- | --- | --- | --- | --- | --- |
