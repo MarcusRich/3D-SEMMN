@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from semmn.eeg import lm
@@ -30,33 +31,60 @@ class BigramStub:
 
 
 def encode(text: str) -> list[int]:
+    if text == ".":
+        return [V - 2]
     word = text.strip()
     n_tokens = 1 + len(word) % 3
-    return [(ord(word[0]) + i) % (V - 1) for i in range(n_tokens)]
+    return [(ord(word[0]) + i) % (V - 2) for i in range(n_tokens)]
 
 
-def test_surprisal_and_embedding_align_to_words():
+def test_surprisal_and_embedding_align_to_words_and_skip_periods():
     stub = BigramStub()
-    words = ["once", "upon", "a", "time", "there", "lived", "an", "old", "fisherman"] * 3
+    words = ["ONCE", "UPON", "TIME", "THERE", "LIVED", "OLD", "FISHERMAN"]
+    final = [False, False, True, False, False, False, True]
     bos = V - 1
-    s, e = lm.gpt2_word_features(words, stub, encode, layer=2, bos=bos, max_context=5, stride=3)
+    s, e = lm.gpt2_word_features(words, stub, encode, layer=2, period_after=final, bos=bos)
     assert s.shape == (len(words),) and e.shape == (len(words), H)
 
     logp = torch.log_softmax(stub.table.double(), dim=-1).numpy()
     prev = bos
     for k, w in enumerate(words):
-        ids = encode(" " + w)
+        ids = encode(" " + w.lower())
         expected = 0.0
         for t in ids:
             expected -= logp[prev, t] / np.log(2)
             prev = t
         assert abs(s[k] - expected) < 1e-9
         np.testing.assert_allclose(e[k], stub.emb[2][ids[-1]].double().numpy())
+        if final[k]:
+            prev = V - 2  # the period is context, never charged to a word
 
-    # The block size changes nothing for a model whose context does not matter.
-    s2, e2 = lm.gpt2_word_features(words, stub, encode, layer=2, bos=bos, max_context=1024, stride=512)
-    np.testing.assert_allclose(s, s2)
-    np.testing.assert_allclose(e, e2)
+
+def test_run_units_and_sentence_final():
+    units, owner = lm.run_units(["A", "B", "C"], encode, [False, True, False])
+    assert owner == [0, 1, -1, 2] and units[2] == [V - 2]
+    np.testing.assert_array_equal(lm.sentence_final(np.array([0, 0, 1, 1, 2])), [False, True, False, True, False])
+
+
+def test_run_longer_than_the_context_raises():
+    with pytest.raises(ValueError, match="context"):
+        lm.gpt2_word_features(["w"] * 10, BigramStub(), encode, layer=1, bos=V - 1, max_context=5)
+
+
+def test_no_lookahead_with_a_real_causal_model():
+    """Changing later words leaves earlier words' features unchanged."""
+    from transformers import GPT2Config, GPT2LMHeadModel
+
+    torch.manual_seed(0)
+    model = GPT2LMHeadModel(GPT2Config(vocab_size=V, n_positions=64, n_embd=16, n_layer=2, n_head=2,
+                                       bos_token_id=V - 1, eos_token_id=V - 1)).eval()
+    a = ["old", "man", "fished", "alone", "skiff"]
+    b = a[:3] + ["quietly", "boat"]
+    sa, ea = lm.gpt2_word_features(a, model, encode, layer=1, bos=V - 1)
+    sb, eb = lm.gpt2_word_features(b, model, encode, layer=1, bos=V - 1)
+    np.testing.assert_allclose(sa[:3], sb[:3], atol=1e-6)
+    np.testing.assert_allclose(ea[:3], eb[:3], atol=1e-5)
+    assert not np.allclose(sa[3:], sb[3:])
 
 
 def test_pca_scores_are_unit_variance_and_fit_on_train_only():

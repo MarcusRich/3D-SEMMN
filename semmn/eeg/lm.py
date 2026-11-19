@@ -45,49 +45,72 @@ def word_token_ids(words: Sequence[str], encode) -> list[list[int]]:
     return ids
 
 
+def run_units(words: Sequence[str], encode, period_after: Sequence[bool] | None = None,
+              period: str = ".") -> tuple[list[list[int]], list[int]]:
+    """Token ids of a run's text units and the word each unit belongs to (-1: punctuation).
+
+    The run's words, lower-cased, each followed by ``period`` (no leading space) when
+    ``period_after`` marks it as the last word of a sentence. Punctuation is context only:
+    it is never charged to a word's surprisal.
+    """
+    per_word = word_token_ids([w.lower() for w in words], encode)
+    stop = list(encode(period))
+    flags = [False] * len(words) if period_after is None else list(period_after)
+    if len(flags) != len(words):
+        raise ValueError("one period flag per word is required")
+    units, owner = [], []
+    for k, ids in enumerate(per_word):
+        units.append(ids)
+        owner.append(k)
+        if flags[k]:
+            units.append(stop)
+            owner.append(-1)
+    return units, owner
+
+
+def sentence_final(sentence_ids: np.ndarray) -> np.ndarray:
+    """True for a word whose next word starts a new sentence (the run's last word: False)."""
+    s = np.asarray(sentence_ids)
+    out = np.zeros(len(s), dtype=bool)
+    out[:-1] = s[1:] != s[:-1]
+    return out
+
+
 def gpt2_word_features(
     words: Sequence[str],
     model,
     encode,
     layer: int,
+    period_after: Sequence[bool] | None = None,
     bos: int = GPT2_BOS,
     max_context: int = 1024,
-    stride: int = 512,
 ) -> tuple[np.ndarray, np.ndarray]:
     """(surprisal in bits (n_words,), layer-``layer`` state at each word's last token).
 
-    ``model(input_ids)`` must return an object with ``.logits`` (1, T, V) and
-    ``.hidden_states`` (tuple of (1, T, H)) when called with ``output_hidden_states=True``.
-    Long texts are processed in blocks of ``stride`` new tokens, each seen with up to
-    ``max_context`` tokens of preceding context.
+    One causal pass over one run's text from ``bos``: each word sees the run's earlier
+    words (and sentence-final periods) and nothing after it, and no other run. The run
+    must fit in ``max_context`` tokens; longer input raises rather than being windowed.
+    ``model(input_ids)`` must return ``.logits`` (1, T, V) and ``.hidden_states`` (tuple
+    of (1, T, H)) when called with ``output_hidden_states=True``.
     """
     import torch
 
-    per_word = word_token_ids(words, encode)
-    full = [bos] + [t for w in per_word for t in w]
-    owner = np.concatenate([[-1]] + [[k] * len(w) for k, w in enumerate(per_word)])
-    length = len(full)
-    logp = np.zeros(length)
-    hidden: np.ndarray | None = None
-    if stride > max_context:
-        raise ValueError("stride must not exceed max_context")
+    units, owner = run_units(words, encode, period_after)
+    full = [bos] + [t for u in units for t in u]
+    tok_owner = np.concatenate([[-1]] + [[o] * len(u) for o, u in zip(owner, units)])
+    if len(full) > max_context:
+        raise ValueError(f"run is {len(full)} tokens, over the {max_context}-token context")
     with torch.no_grad():
-        for b in range(1, length, stride):
-            end = min(b + stride, length)
-            start = max(0, end - max_context)
-            ids = torch.tensor([full[start:end]])
-            out = model(ids, output_hidden_states=True)
-            lp = torch.log_softmax(out.logits[0].double(), dim=-1).numpy()
-            hs = out.hidden_states[layer][0].double().numpy()
-            if hidden is None:
-                hidden = np.zeros((length, hs.shape[1]))
-            for p in range(b, end):
-                logp[p] = lp[p - 1 - start, full[p]]
-                hidden[p] = hs[p - start]
-    surprisal = np.zeros(len(per_word))
-    np.add.at(surprisal, owner[1:], -logp[1:] / np.log(2))
-    last = np.array([np.max(np.nonzero(owner == k)[0]) for k in range(len(per_word))])
-    return surprisal, hidden[last]
+        out = model(torch.tensor([full]), output_hidden_states=True)
+    lp = torch.log_softmax(out.logits[0].double(), dim=-1).numpy()
+    hs = out.hidden_states[layer][0].double().numpy()
+    tok_logp = np.zeros(len(full))
+    tok_logp[1:] = lp[np.arange(len(full) - 1), full[1:]]
+    surprisal = np.zeros(len(words))
+    word_tok = tok_owner >= 0
+    np.add.at(surprisal, tok_owner[word_tok], -tok_logp[word_tok] / np.log(2))
+    last = np.array([np.max(np.nonzero(tok_owner == k)[0]) for k in range(len(words))])
+    return surprisal, hs[last]
 
 
 @dataclass

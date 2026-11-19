@@ -19,6 +19,9 @@ TIERS: dict[str, tuple[str, ...]] = {
     "B_env_onset": ("env", "onset"),
     "C_env_onset_lm": ("env", "onset") + WORD_FEATURES,
     "L_onset_lm": ("onset",) + WORD_FEATURES,
+    # P4: GPT-2 features added one at a time on top of envelope + onsets.
+    "S_env_onset_sur": ("env", "onset", "surprisal"),
+    "E_env_onset_sur_emb": ("env", "onset", "surprisal", "embedding"),
 }
 
 
