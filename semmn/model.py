@@ -58,6 +58,7 @@ class SEMMNModel(nn.Module):
             latent_dim=config.model.latent_dim,
             feature_dim=config.model.vision_feature_dim,
             attention_heads=config.model.attention_heads,
+            direct_fusion=config.model.hub_direct_fusion,
         )
 
         self.vision_proj = nn.Linear(config.model.vision_feature_dim, config.model.latent_dim)

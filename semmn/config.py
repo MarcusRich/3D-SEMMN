@@ -27,10 +27,14 @@ class ModelConfig:
     audio_feature_dim: int = 256
     recurrent_steps: int = 6
     attention_heads: int = 4
+    # Legacy: add encoder features straight into the hub's fused latent (bypasses the grid).
+    hub_direct_fusion: bool = False
 
 
 @dataclass
 class ConnectivityConfig:
+    # False lesions inter-column message passing (messages are zero, STDP is skipped).
+    enabled: bool = True
     lambda_decay: float = 5.0
     inter_density: float = 0.08
     intra_density_boost: float = 2.0

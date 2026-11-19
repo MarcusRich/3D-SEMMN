@@ -22,9 +22,9 @@ class Batch:
 class SyntheticAVMNIST(Dataset):
     """Pair MNIST vision with synthetic spectrogram-like audio."""
 
-    def __init__(self, root: str, train: bool = True) -> None:
+    def __init__(self, root: str, train: bool = True, download: bool = True) -> None:
         tfm = transforms.ToTensor()
-        self.mnist = datasets.MNIST(root=root, train=train, download=True, transform=tfm)
+        self.mnist = datasets.MNIST(root=root, train=train, download=download, transform=tfm)
 
     def __len__(self) -> int:
         return len(self.mnist)
@@ -70,10 +70,23 @@ class HuggingFaceAVMNIST(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         row = self.ds[idx]
-        vision = _to_tensor_image(row.get("image") or row.get("vision") or row.get("mnist"))
-        audio = _to_tensor_audio(row.get("audio") or row.get("spectrogram") or row.get("sound"))
-        label = int(row.get("label") or row.get("digit") or row.get("class"))
+        vision = _to_tensor_image(_first_present(row, ("image", "vision", "mnist")))
+        audio = _to_tensor_audio(_first_present(row, ("audio", "spectrogram", "sound")))
+        label = int(_first_present(row, ("label", "digit", "class")))
         return vision, audio, torch.tensor(label, dtype=torch.long)
+
+
+def _first_present(row: dict, keys: tuple[str, ...]):
+    """Return the value of the first key present in `row`.
+
+    Checks presence (`is not None`), not truthiness: label `0` and array-valued
+    fields are valid values, so an `a or b` chain would drop or reject them.
+    """
+    for key in keys:
+        value = row.get(key)
+        if value is not None:
+            return value
+    raise KeyError(f"row has none of the keys {keys}; available: {sorted(row)}")
 
 
 def _to_tensor_image(value) -> torch.Tensor:
