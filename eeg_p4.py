@@ -91,9 +91,10 @@ def encoding_section(cond: str, enc: list[dict], p3_enc: list[dict]) -> tuple[li
     out.append("")
     if p3_enc:
         out += [f"### {cond}: GPT-2 against P3's stand-in word features (same folds, same subjects)", "",
-                "Tiers A and B must reproduce P3 exactly; the last column compares the word-feature tiers.", "",
-                "| montage | max abs diff A vs P3 | max abs diff B vs P3 | E (GPT-2) − C (stand-in): mean Δr, "
-                "subjects > 0, dz, p |", "| --- | --- | --- | --- |"]
+                "Tiers A and B must reproduce P3 exactly on the fixed montages. The best-k sets are picked by "
+                "the main tier (E here, C in P3), so they hold different channels and A and B differ there.", "",
+                "| montage | max abs diff A vs P3 | max abs diff B vs P3 | E (GPT-2) − C (stand-in): mean Δr | "
+                "subjects > 0 | dz | p |", "| --- | --- | --- | --- | --- | --- | --- |"]
         for m in monts:
             diffs = []
             for t in (A, B):
@@ -110,9 +111,9 @@ def segment_section(cond: str, dec: list[dict]) -> list[str]:
     out = [f"## {cond}: segment identification (other held-out segments as candidates)", "",
            "Pooled top-k over subjects; subject-level test is per-subject top-k against chance (one-sided t). "
            "Language against acoustics is the paired per-subject difference from tier A on the same windows.", "",
-           "| window s | montage | tier | N | top-1 | top-10 | chance top-1 / top-10 | subjects top-10 > chance, p | "
+           "| window s | montage | tier | N | top-1 | top-10 | chance top-1 / top-10 | subjects top-10 > chance | subject-level p | "
            "top-10 − tier A, points [95% CI] | paired p | top-1 − tier A, points [95% CI] |",
-           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for win in dict.fromkeys(r["window_s"] for r in dec):
         for m in MONTAGES:
             for t in (A, B, S, E):
@@ -153,10 +154,13 @@ def distractor_section(cond: str, dis: list[dict]) -> list[str]:
            "Envelope-only and envelope+onset models score every candidate identically here, so they sit at "
            "chance by construction. 'Shuffled EEG' scores each window's candidates against another window of "
            "the same subject (mean over derangements) and must sit at chance. 'Prior only' ranks by GPT-2 "
-           "log-probability with no EEG.", "",
-           "| montage | tier | top-1 | top-10 | subjects top-1 > chance, p | subjects top-10 > chance, p | "
-           "shuffled EEG top-1 / top-10 | prior only top-1 / top-10 |",
-           "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+           "log-probability with no EEG. A ranker can beat chance without using the EEG at all (for example "
+           "when distractor features are atypical), so the EEG-specific evidence is the paired per-subject "
+           "excess of the real EEG over the shuffled EEG, not the distance from chance.", "",
+           "| montage | tier | top-1 | top-10 | subjects top-1 > chance | p | subjects top-10 > chance | p | "
+           "shuffled EEG top-1 / top-10 | prior only top-1 / top-10 | "
+           "real − shuffled EEG top-1, points [95% CI] | p | real − shuffled EEG top-10, points [95% CI] | p |",
+           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for m in MONTAGES:
         for t in (S, E):
             rows = [r for r in dis if r["montage"] == m and r["tier"] == t]
@@ -171,9 +175,17 @@ def distractor_section(cond: str, dis: list[dict]) -> list[str]:
             sh10 = np.mean([float(r["shuffled_top10"]) for r in rows])
             out.append(f"| {m} | {t} | {top1:.3f} | {top10:.3f} | {vs_chance(a1, 1 / ncand)} | "
                        f"{vs_chance(a10, 10 / ncand)} | {sh1:.3f} / {sh10:.3f} | "
-                       f"{float(rows[0]['prior_top1']):.3f} / {float(rows[0]['prior_top10']):.3f} |")
+                       f"{float(rows[0]['prior_top1']):.3f} / {float(rows[0]['prior_top10']):.3f} | "
+                       f"{excess(rows, 'top1')} | {excess(rows, 'top10')} |")
     out.append("")
     return out
+
+
+def excess(rows: list[dict], key: str) -> str:
+    """Per-subject real-EEG minus shuffled-EEG accuracy: mean [95% CI] in points | paired t p."""
+    d = np.array([float(r[key]) - float(r[f"shuffled_{key}"]) for r in rows])
+    p = sstats.ttest_1samp(d, 0).pvalue if len(d) > 1 and d.std() > 0 else float("nan")
+    return f"{ci(d, 100, '+.1f')} | {p:.2g}"
 
 
 def starter_section(cond: str, gains: dict, dec: list[dict], dis: list[dict]) -> list[str]:
