@@ -91,3 +91,28 @@ def test_nucleus_keeps_the_top_mass_only():
     gen = torch.Generator().manual_seed(0)
     draws = ds._nucleus_sample(p, 0.7, gen)
     assert set(draws.tolist()) == {0, 1}  # 0.5 + 0.3 reaches 0.7; 0.15 and 0.05 are cut
+
+
+def test_context_between_slots_matches_the_one_pass_full_stream():
+    """Full transcript: slots are content words, the function words between them are
+    forced context; the forced path must reproduce the one-pass features."""
+    model = tiny_gpt2(2)
+    full = ["the", "old", "man", "and", "the", "sea", "were", "alone", "in", "skiff"]
+    flags = [False, False, False, False, False, True, False, False, False, False]
+    content = [1, 2, 5, 7, 9]  # positions of the content words in the full stream
+    s1, e1 = lm.gpt2_word_features(full, model, encode, layer=1, period_after=flags, bos=BOS)
+    units, owner = lm.run_units(full, encode, flags)
+    first = {o: u for u, o in enumerate(owner) if o >= 0}
+    u = [first[c] for c in content]
+    prefix = [BOS] + [t for x in units[: u[0]] for t in x]
+    after = [[t for x in units[u[i] + 1 : u[i + 1]] for t in x] for i in range(len(u) - 1)] + [[]]
+    f = ds.sample_window(model, prefix, [False] * len(u), [PERIOD], layer=1,
+                         forced=[units[i] for i in u], context_after=after)
+    np.testing.assert_allclose(f["surprisal"][0], s1[content], atol=1e-5)
+    np.testing.assert_allclose(f["hidden"][0], e1[content], atol=1e-5)
+    start, cont = masks()
+    g = ds.sample_window(model, prefix, [False] * len(u), [PERIOD], layer=1, start_mask=start,
+                         cont_mask=cont, k=6, seed=1, context_after=after)
+    for b, seq in enumerate(g["tokens"]):
+        h = ds.sample_window(model, prefix, [False] * len(u), [PERIOD], layer=1, forced=seq, context_after=after)
+        np.testing.assert_allclose(g["surprisal"][b], h["surprisal"][0], atol=1e-5)

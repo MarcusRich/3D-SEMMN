@@ -118,7 +118,8 @@ def minilm_snapshot() -> Path:
     return snaps[-1]
 
 
-def words_stage(root: Path, backend: str, layer: int) -> Path:
+def words_stage(root: Path, backend: str, layer: int, textgrids: Path | None = None,
+                train_runs: list[int] | None = None) -> Path:
     """Per-word features for the whole story, in run order.
 
     The release lists content words only (``wordVec``), not the full transcript.
@@ -146,6 +147,8 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
                  embedding=vec.astype(np.float32), run=run_of)
         log(f"local word features: {len(flat)} content words")
         return out
+    if backend == "gpt2full":
+        return words_full_stage(root, layer, textgrids, train_runs)
     out = root / "cache" / f"lm_gpt2_run_l{layer}.npz"
     if out.exists():
         return out
@@ -166,6 +169,76 @@ def words_stage(root: Path, backend: str, layer: int) -> Path:
              sentence_final=np.concatenate(final), run_tokens=np.array(n_tok))
     log(f"GPT-2 features: {len(flat)} words, layer {layer}, run context only "
         f"({min(n_tok)}-{max(n_tok)} tokens per run)")
+    return out
+
+
+def sentence_close(root: Path) -> dict[int, np.ndarray]:
+    """Sentence-close times (s) of every run."""
+    text, _ = br.discover_stimuli(root / CONDITIONS["forward"])
+    return {r: np.sort(np.atleast_1d(np.asarray(br.load_mat(p)[br.SENTENCE_KEY], float)).reshape(-1))
+            for r, p in sorted(text.items())}
+
+
+def words_full_stage(root: Path, layer: int, textgrids: Path | None, train_runs: list[int] | None) -> Path:
+    """GPT-2 features from the full transcript, kept at the release's content words.
+
+    Each run's full word sequence comes from a forced-alignment TextGrid
+    (``audioNN.TextGrid`` for run NN). GPT-2 reads the whole run so far (every word,
+    lower-cased, with a period at each sentence close); each content word of the release
+    takes the features of the full-transcript word it aligns to. A content word with no
+    aligned word gets the training-run mean of the aligned words' features, so its onset
+    stays in the design with a neutral value, like for like with P4.
+    """
+    from semmn.eeg import transcript as tx
+
+    if textgrids is None:
+        raise ValueError("the gpt2full backend needs --textgrids")
+    train_runs = train_runs or list(range(1, 16))
+    out = root / "cache" / f"lm_gpt2full_run_l{layer}.npz"
+    if out.exists():
+        return out
+    torch_threads()
+    words = story_words(root)
+    close = sentence_close(root)
+    model, tok = lm.load_gpt2(GPT2_NAME)
+    sur, emb, matched, cfull, final = [], [], [], [], []
+    full_words, full_run, full_period, n_tok, rates, diffs = [], [], [], [], [], []
+    for r in sorted(words):
+        full, fon, _ = tx.word_intervals(tx.read_textgrid(textgrids / f"audio{r:02d}.TextGrid"))
+        al = tx.align_content(list(words[r].words), words[r].onsets, full, fon)
+        flags = tx.period_after_full(fon, close[r])
+        units, _ = lm.run_units(full, tok.encode, flags)
+        n_tok.append(1 + sum(len(u) for u in units))
+        s_full, e_full = lm.gpt2_word_features(full, model, tok.encode, layer=layer, period_after=flags)
+        ok = al.index >= 0
+        s_r = np.full(len(ok), np.nan)
+        e_r = np.full((len(ok), e_full.shape[1]), np.nan)
+        s_r[ok], e_r[ok] = s_full[al.index[ok]], e_full[al.index[ok]]
+        sur.append(s_r)
+        emb.append(e_r)
+        matched.append(ok)
+        cfull.append(al.index)
+        final.append(lm.sentence_final(story_sentences(root)[r]))
+        full_words += [w.lower() for w in full]
+        full_run += [r] * len(full)
+        full_period.append(flags)
+        rates.append(al.match_rate)
+        diffs.append(al.onset_diff)
+        log(f"run {r}: {len(full)} words in the transcript, {len(ok)} content words, {ok.mean():.1%} aligned, "
+            f"median |onset diff| {np.median(np.abs(al.onset_diff)) * 1000:.0f} ms, {n_tok[-1]} tokens")
+    run_of = np.concatenate([[r] * len(m) for r, m in zip(sorted(words), matched)])
+    sur, emb, matched = np.concatenate(sur), np.concatenate(emb), np.concatenate(matched)
+    fill = matched & np.isin(run_of, train_runs)
+    sur[~matched] = sur[fill].mean()
+    emb[~matched] = emb[fill].mean(axis=0)
+    d = np.abs(np.concatenate(diffs))
+    np.savez(out, surprisal=sur, embedding=emb.astype(np.float32), run=run_of, matched=matched,
+             content_full=np.concatenate(cfull), sentence_final=np.concatenate(final),
+             full_words=np.array(full_words, dtype=object), full_run=np.array(full_run),
+             full_period=np.concatenate(full_period), run_tokens=np.array(n_tok), match_rate=np.array(rates))
+    log(f"full-transcript GPT-2 features: {matched.mean():.2%} of {len(matched)} content words aligned "
+        f"(runs {min(rates):.1%}-{max(rates):.1%}); |onset diff| median {np.median(d) * 1000:.0f} ms, "
+        f"95th pct {np.percentile(d, 95) * 1000:.0f} ms; {min(n_tok)}-{max(n_tok)} tokens per run")
     return out
 
 
@@ -191,6 +264,8 @@ class Design:
         z = np.load(lm_path)
         run_of = z["run"]
         tr = np.isin(run_of, train_runs)
+        if "matched" in z.files:  # full transcript: fit on aligned words; unaligned ones then map to 0
+            tr &= z["matched"]
         # Word features, scaled with training-run words only.
         word_feats: dict[str, np.ndarray] = {}
         # Raw word value -> regressor value, fitted on training-run words only; kept so
@@ -328,69 +403,115 @@ def window_slots(design: Design, r: int, start: int, win: int) -> np.ndarray:
 
 def distract(root: Path, condition: str, subjects: list[int], lm_path: Path, train_runs: list[int],
              test_runs: list[int], win_s: float, n_distractors: int, layer: int, top_p: float,
-             basis_pcs: int = 64) -> Path:
+             basis_pcs: int = 64, runs_now: list[int] | None = None) -> Path | None:
     """GPT-2 distractors for every test-run window of a condition (see semmn.eeg.distractors).
 
-    Embeddings are stored as coordinates in a ``basis_pcs``-component PCA basis fitted on
-    training-run words, which reproduces any smaller training PCA exactly. The true words
-    are also re-scored through the sampler's forced path, as a check on the one-pass
-    features.
+    With a content-word feature file, GPT-2 reads the content-word stream. With a
+    full-transcript file (words stage ``gpt2full``), each distractor replaces the
+    window's aligned content words, and the true function words and periods between
+    them stay in place as context, so the prior context is the full run so far.
+
+    Embeddings are stored as coordinates in a ``basis_pcs``-component PCA basis fitted
+    on training-run words, which reproduces any smaller training PCA exactly. The true
+    words are also re-scored through the sampler's forced path, as a check on the
+    one-pass features. Each run is cached on its own; ``runs_now`` limits this call to
+    some runs (so one call stays under a time cap), and the file is written once every
+    test run is cached.
     """
     from semmn.eeg import distractors as ds
 
-    out = root / "cache" / f"distractors_{condition}_w{win_s:g}_k{n_distractors}_p{top_p:g}_l{layer}.npz"
+    tag = "full" if "full_words" in np.load(lm_path, allow_pickle=True).files else ""
+    out = root / "cache" / f"distractors{tag}_{condition}_w{win_s:g}_k{n_distractors}_p{top_p:g}_l{layer}.npz"
     if out.exists():
         return out
     torch_threads()
     t0 = time.time()
     design = Design(root, condition, subjects, lm_path, train_runs, n_pcs=0)
-    z = np.load(lm_path)
+    z = np.load(lm_path, allow_pickle=True)
     tr = np.isin(z["run"], train_runs)
+    if "matched" in z.files:
+        tr &= z["matched"]
     basis = lm.Pca.fit(z["embedding"][tr], basis_pcs)
     words = story_words(root)
-    model, tok = lm.load_gpt2(GPT2_NAME)
-    vocab_story = {w.lower() for r in words for w in words[r].words}
-    function_words = ds.FUNCTION_WORDS - vocab_story
-    strings = [tok.decode([i]) for i in range(len(tok))]
-    start_mask, cont_mask = ds.content_masks(strings, function_words)
-    period_ids = tok.encode(".")
+    test_runs = [r for r in test_runs if r in design.runs]
+    part = {r: out.with_name(out.stem + f"_run{r:02d}.npz") for r in test_runs}
+    todo = [r for r in test_runs if not part[r].exists() and (runs_now is None or r in runs_now)]
+    if todo:
+        model, tok = lm.load_gpt2(GPT2_NAME)
+        vocab_story = {w.lower() for r in words for w in words[r].words}
+        start_mask, cont_mask = ds.content_masks([tok.decode([i]) for i in range(len(tok))],
+                                                 ds.FUNCTION_WORDS - vocab_story)
+        period_ids = tok.encode(".")
     win = int(win_s * FS)
-    rec: dict[str, list] = {k: [] for k in ("run", "start", "lo", "hi")}
-    cand_sur, cand_emb, cand_words, true_dsur, true_demb = [], [], [], [], []
-    for r in [r for r in test_runs if r in design.runs]:
-        flags = z["sentence_final"][design.word_flat[r]].astype(bool)
-        units, owner = lm.run_units(words[r].words, tok.encode, flags)
+    for r in todo:
+        if tag:
+            sel = z["full_run"] == r
+            units, owner = lm.run_units(list(z["full_words"][sel]), tok.encode, z["full_period"][sel])
+            slot_of = z["content_full"][design.word_flat[r]]  # content position -> full index, or -1
+        else:
+            flags = z["sentence_final"][design.word_flat[r]].astype(bool)
+            units, owner = lm.run_units(words[r].words, tok.encode, flags)
+            slot_of = np.arange(len(words[r]))
         first_unit = {o: u for u, o in enumerate(owner) if o >= 0}
+        res: dict[str, list] = {k: [] for k in ("start", "slots", "sur", "coords", "words", "dsur", "demb")}
         for st in decode.window_starts(design.length[r], win):
-            pos = window_slots(design, r, int(st), win)
+            pos = np.array([q for q in window_slots(design, r, int(st), win) if slot_of[q] >= 0], dtype=int)
             if len(pos) == 0:
                 continue
-            prefix = [lm.GPT2_BOS] + [t for u in units[: first_unit[int(pos[0])]] for t in u]
-            slot_flags = flags[pos]
+            u = [first_unit[int(slot_of[q])] for q in pos]
+            prefix = [lm.GPT2_BOS] + [t for x in units[: u[0]] for t in x]
+            after = [[t for x in units[u[i] + 1 : u[i + 1]] for t in x] for i in range(len(u) - 1)] + [[]]
             seed = (1 if condition == "reverse" else 0) * 10**7 + r * 10**5 + int(st)
-            g = ds.sample_window(model, prefix, slot_flags, period_ids, layer, start_mask, cont_mask,
-                                 k=n_distractors, seed=seed, top_p=top_p)
-            f = ds.sample_window(model, prefix, slot_flags, period_ids, layer,
-                                 forced=[units[first_unit[int(q)]] for q in pos])
+            n = [False] * len(pos)
+            g = ds.sample_window(model, prefix, n, period_ids, layer, start_mask, cont_mask, k=n_distractors,
+                                 seed=seed, top_p=top_p, context_after=after)
+            f = ds.sample_window(model, prefix, n, period_ids, layer, forced=[units[i] for i in u],
+                                 context_after=after)
             flat = design.word_flat[r][pos]
-            true_dsur.append(np.abs(f["surprisal"][0] - z["surprisal"][flat]).max())
-            true_demb.append(np.abs(f["hidden"][0] - z["embedding"][flat]).max())
+            res["dsur"].append(np.abs(f["surprisal"][0] - z["surprisal"][flat]).max())
+            res["demb"].append(np.abs(f["hidden"][0] - z["embedding"][flat]).max())
+            res["start"].append(int(st))
+            res["slots"].append(flat)
+            res["sur"].append(g["surprisal"])
+            k, m, h = g["hidden"].shape
+            res["coords"].append(((g["hidden"].reshape(k * m, h) - basis.mean) @ basis.components.T).reshape(k, m, -1))
+            res["words"].append(["|".join(tok.decode(t).strip() for t in seq) for seq in g["tokens"]])
+        np.savez(part[r], **{k: _objects(v) for k, v in res.items()})
+        log(f"{condition} distractors: run {r} cached ({len(res['start'])} windows, {time.time() - t0:.0f}s)")
+    if not all(part[r].exists() for r in test_runs):
+        log(f"{condition} distractors: runs still to do: {[r for r in test_runs if not part[r].exists()]}")
+        return None
+    rec: dict[str, list] = {"run": [], "start": [], "lo": [], "hi": []}
+    sur, coords, slots, cwords, dsur, demb = [], [], [], [], [], []
+    for r in test_runs:
+        q = np.load(part[r], allow_pickle=True)
+        for i, st in enumerate(q["start"]):
+            flat = np.asarray(q["slots"][i], dtype=int)
             rec["run"].append(r)
             rec["start"].append(int(st))
             rec["lo"].append(int(flat[0]))
             rec["hi"].append(int(flat[-1]) + 1)
-            cand_sur.append(g["surprisal"])
-            k, m, h = g["hidden"].shape
-            cand_emb.append(((g["hidden"].reshape(k * m, h) - basis.mean) @ basis.components.T).reshape(k, m, -1))
-            cand_words.append(["|".join(tok.decode(t).strip() for t in seq) for seq in g["tokens"]])
-        log(f"{condition} distractors: run {r} done ({len(rec['run'])} windows, {time.time() - t0:.0f}s)")
-    save_distractors(out, rec, cand_sur, cand_emb, basis, win, train_runs,
-                     cand_words=np.array(cand_words, dtype=object), true_forced_max_dsur=np.array(true_dsur),
-                     true_forced_max_demb=np.array(true_demb))
+            slots.append(flat)
+            sur.append(np.asarray(q["sur"][i], float))
+            coords.append(np.asarray(q["coords"][i], float))
+            cwords.append(list(q["words"][i]))
+        dsur += [float(x) for x in q["dsur"]]
+        demb += [float(x) for x in q["demb"]]
+    save_distractors(out, rec, sur, coords, basis, win, train_runs, slot_flat=np.concatenate(slots),
+                     cand_words=np.array(cwords, dtype=object), true_forced_max_dsur=np.array(dsur),
+                     true_forced_max_demb=np.array(demb))
     log(f"{condition} distractors: {len(rec['run'])} windows x {n_distractors}; forced-path check on the "
-        f"true words: max |d surprisal| {max(true_dsur):.2g} bits, max |d state| {max(true_demb):.2g} "
+        f"true words: max |d surprisal| {max(dsur):.2g} bits, max |d state| {max(demb):.2g} "
         f"({time.time() - t0:.0f}s)")
     return out
+
+
+def _objects(items: list) -> np.ndarray:
+    """A 1-D object array holding each item as is (ragged arrays are never broadcast)."""
+    arr = np.empty(len(items), dtype=object)
+    for i, x in enumerate(items):
+        arr[i] = x
+    return arr
 
 
 def save_distractors(out: Path, rec: dict[str, list], cand_sur: list[np.ndarray], cand_coords: list[np.ndarray],
@@ -415,11 +536,18 @@ def load_distractors(path: Path, design: Design, condition: str) -> dict:
     windows = []
     for i in range(len(z["run"])):
         r, st = int(z["run"][i]), int(z["start"][i])
-        pos = window_slots(design, r, st, int(z["win"]))
-        flat = design.word_flat[r][pos]
-        if len(flat) == 0 or flat[0] != z["lo"][i] or flat[-1] + 1 != z["hi"][i]:
-            raise ValueError(f"{condition}: distractor window run {r} at {st} does not match the design")
+        inside = window_slots(design, r, st, int(z["win"]))
         sl = slice(int(z["ptr"][i]), int(z["ptr"][i + 1]))
+        if "slot_flat" in z.files:  # some window words may have no slot (not aligned)
+            flat = z["slot_flat"][sl].astype(int)
+            pos = flat - design.word_flat[r][0]
+            if not set(pos.tolist()) <= set(inside.tolist()):
+                raise ValueError(f"{condition}: distractor slots of run {r} at {st} fall outside the window")
+        else:
+            pos = inside
+            flat = design.word_flat[r][pos]
+            if len(flat) == 0 or flat[0] != z["lo"][i] or flat[-1] + 1 != z["hi"][i]:
+                raise ValueError(f"{condition}: distractor window run {r} at {st} does not match the design")
         cand, true = {}, {}
         for n in names:
             if n == "surprisal":
@@ -787,8 +915,10 @@ def main() -> None:
     p.add_argument("--condition", choices=list(CONDITIONS), default="forward")
     p.add_argument("--subjects", default="1-8")
     p = sub.add_parser("words")
-    p.add_argument("--backend", choices=["local", "gpt2"], default="local")
+    p.add_argument("--backend", choices=["local", "gpt2", "gpt2full"], default="local")
     p.add_argument("--layer", type=int, default=6)
+    p.add_argument("--textgrids", type=Path, default=None, help="forced-alignment TextGrids (gpt2full)")
+    p.add_argument("--train-runs", default="1-15", help="runs whose aligned words fill unaligned ones")
     p = sub.add_parser("encode")
     p.add_argument("--condition", choices=list(CONDITIONS), default="forward")
     p.add_argument("--subjects", default="1-8")
@@ -813,6 +943,7 @@ def main() -> None:
     p.add_argument("--distractors", type=int, default=88)
     p.add_argument("--layer", type=int, default=6)
     p.add_argument("--top-p", type=float, default=0.9)
+    p.add_argument("--runs-now", default=None, help="only these test runs in this call (others later)")
     p = sub.add_parser("summarize")
     p.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "outputs" / "eeg")
     a = ap.parse_args()
@@ -825,10 +956,11 @@ def main() -> None:
     if a.stage == "prep":
         prep(root, a.condition, parse_ints(a.subjects))
     elif a.stage == "words":
-        print(words_stage(root, a.backend, a.layer))
+        print(words_stage(root, a.backend, a.layer, a.textgrids, parse_ints(a.train_runs)))
     elif a.stage == "distract":
         print(distract(root, a.condition, parse_ints(a.subjects), a.lm, parse_ints(a.train_runs),
-                       parse_ints(a.test_runs), a.window, a.distractors, a.layer, a.top_p))
+                       parse_ints(a.test_runs), a.window, a.distractors, a.layer, a.top_p,
+                       runs_now=parse_ints(a.runs_now) if a.runs_now else None))
     else:
         encode(root, a.condition, parse_ints(a.subjects), parse_ints(a.train_runs), parse_ints(a.test_runs),
                a.folds, a.lm, a.pcs, a.out, [float(w) for w in a.windows.split(",")], a.tiers.split(","),

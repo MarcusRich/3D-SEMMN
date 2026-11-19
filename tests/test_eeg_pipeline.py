@@ -135,3 +135,95 @@ def test_distractor_ranking_finds_planted_word_responses(tmp_path):
     # The fake word-feature file also has dissimilarity, so tier E is not the full design
     # and the N400 kernels (which index the full design) are skipped rather than mis-read.
     assert not (out / "n400_trf_per_subject_forward.csv").exists()
+
+
+CONTENT = ["fish", "boat", "sea", "line", "hand", "sun", "bird", "water", "boy", "skiff",
+           "gulf", "stream", "night", "dark", "light", "shark", "oar", "sail", "mast", "hook"]
+
+
+class ToyTokenizer:
+    """One token per word (leading space), a period, and GPT-2's end-of-text id."""
+
+    def __init__(self, words):
+        self.strings = [" " + w for w in sorted(set(words))]
+        self.ids = {s.strip(): i for i, s in enumerate(self.strings)}
+        self.period = len(self.strings)
+        self.strings += ["."] + [f"#{i}" for i in range(len(self.strings) + 1, 50256)] + ["<|endoftext|>"]
+
+    def encode(self, text):
+        return [self.period] if text == "." else [self.ids[text.strip()]]
+
+    def decode(self, ids):
+        return "".join(self.strings[i] for i in ids)
+
+    def __len__(self):
+        return len(self.strings)
+
+
+def _write_textgrid(path, words, onsets, offsets):
+    rows = [(0.0, float(onsets[0]), "sil")] + [(float(a), float(b), w) for w, a, b in zip(words, onsets, offsets)]
+    lines = ['File type = "ooTextFile"', 'Object class = "TextGrid"', "", "xmin = 0", f"xmax = {rows[-1][1]}",
+             "tiers? <exists>", "size = 1", "item []:", "    item [1]:", '        class = "IntervalTier"',
+             '        name = "words"', "        xmin = 0", f"        xmax = {rows[-1][1]}",
+             f"        intervals: size = {len(rows)}"]
+    for k, (a, b, w) in enumerate(rows, 1):
+        lines += [f"        intervals [{k}]:", f"            xmin = {a}", f"            xmax = {b}",
+                  f'            text = "{w}"']
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_full_transcript_stages_end_to_end(tmp_path, monkeypatch):
+    """words --backend gpt2full and distract in full-transcript mode, then encode."""
+    pytest.importorskip("mne")
+    transformers = pytest.importorskip("transformers")
+    _make_dataset(tmp_path)
+    eeg_p3.prep(tmp_path, "forward", [1, 2, 3])
+    text_dir = tmp_path / eeg_p3.CONDITIONS["forward"] / "Stimuli" / "Text"
+    tg_dir = tmp_path / "textgrids"
+    tg_dir.mkdir()
+    for r in range(1, 5):
+        m = sio.loadmat(text_dir / f"Run{r}.mat")
+        on = m["onset_time"].ravel()
+        words = np.array([CONTENT[i % len(CONTENT)].upper() for i in range(len(on))], dtype=object)
+        sio.savemat(text_dir / f"Run{r}.mat", {"wordVec": words, "onset_time": on, "offset_time": on + 0.2,
+                                                "sentence_boundaries": np.arange(5.0, 60.0, 5.0)})
+        full, fon = [], []
+        for i, (w, t) in enumerate(zip(words, on)):
+            prev = on[i - 1] if i else 0.3
+            full.append("the")
+            fon.append((prev + t) / 2)
+            if i == 7:
+                continue  # one content word missing from the transcript
+            full.append("sails" if w == "SAIL" and i < 30 else w.lower())
+            fon.append(t)
+        fon = np.array(fon)
+        _write_textgrid(tg_dir / f"audio{r:02d}.TextGrid", full, fon, fon + 0.1)
+    torch = pytest.importorskip("torch")
+    torch.manual_seed(0)
+    tok = ToyTokenizer(CONTENT + ["the", "sails"])
+    model = transformers.GPT2LMHeadModel(transformers.GPT2Config(
+        vocab_size=len(tok), n_positions=1024, n_embd=8, n_layer=2, n_head=2,
+        bos_token_id=50256, eos_token_id=50256)).eval()
+    monkeypatch.setattr(eeg_p3.lm, "load_gpt2", lambda name="gpt2": (model, tok))
+
+    lm_path = eeg_p3.words_stage(tmp_path, "gpt2full", 1, tg_dir, [1, 2])
+    z = np.load(lm_path, allow_pickle=True)
+    assert np.all(np.isfinite(z["surprisal"])) and np.all(np.isfinite(z["embedding"]))
+    assert (~z["matched"]).sum() == 4  # word 7 of each run; "sails" for "sail" is a spelling match
+    assert z["match_rate"].min() > 0.99 and set(z["full_words"]) >= {"the", "sails"}
+
+    args = (tmp_path, "forward", [1, 2, 3], lm_path, [1, 2], [3, 4], 10.0, 5, 1, 0.9)
+    assert eeg_p3.distract(*args, runs_now=[3]) is None  # run 4 still to do
+    dis = eeg_p3.distract(*args)
+    d = np.load(dis, allow_pickle=True)
+    assert d["true_forced_max_dsur"].max() < 1e-3 and d["true_forced_max_demb"].max() < 1e-3
+    assert len(d["slot_flat"]) == d["ptr"][-1] and "full" in dis.name
+    out = tmp_path / "out"
+    eeg_p3.encode(tmp_path, "forward", [1, 2, 3], [1, 2], [3, 4], 3, lm_path, 4, out, [10.0],
+                  ["A_env", "B_env_onset", "S_env_onset_sur", "E_env_onset_sur_emb"],
+                  main_tier="E_env_onset_sur_emb", distractor_path=dis, n_shuffles=5)
+    with (out / "distractor_per_subject_forward.csv").open() as fh:
+        rows = list(csv.DictReader(fh))
+    assert {r["tier"] for r in rows} == {"S_env_onset_sur", "E_env_onset_sur_emb"}
+    assert all(int(r["n_candidates"]) == 6 for r in rows)
+    assert (out / "n400_trf_per_subject_forward.csv").exists()

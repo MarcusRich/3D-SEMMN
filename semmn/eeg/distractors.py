@@ -82,16 +82,23 @@ def sample_window(
     top_p: float = 0.9,
     max_cont: int = 3,
     forced: Sequence[Sequence[int]] | None = None,
+    context_after: Sequence[Sequence[int]] | None = None,
 ) -> dict:
     """Sample (or, with ``forced``, score) ``k`` word sequences after ``prefix``.
 
-    ``period_after[i]`` appends ``period_ids`` after slot i as context. Returns
+    ``period_after[i]`` appends ``period_ids`` after slot i as context. With the full
+    transcript, ``context_after[i]`` replaces that: the true tokens between slot i and
+    slot i + 1 (function words, periods), fed as context to every sequence. Returns
     ``surprisal`` (k, n) in bits, ``hidden`` (k, n, H) and ``tokens`` (k lists of n
     token lists). ``forced`` is one token list per slot and implies k = 1.
     """
     import torch
 
     n = len(period_after)
+    after = ([list(period_ids) if f else [] for f in period_after] if context_after is None
+             else [list(c) for c in context_after])
+    if len(after) != n:
+        raise ValueError("one context list per slot is required")
     if forced is not None:
         if len(forced) != n:
             raise ValueError("one forced token list per slot is required")
@@ -160,9 +167,8 @@ def sample_window(
             if hidden is None:
                 hidden = torch.zeros(k, n, last.shape[1], dtype=torch.float64)
             hidden[:, i] = last
-            if period_after[i]:
-                for t in period_ids:
-                    feed(torch.full((k,), int(t), dtype=torch.long), everyone)
+            for t in after[i]:
+                feed(torch.full((k,), int(t), dtype=torch.long), everyone)
     if hidden is None:
         hidden = torch.zeros(k, 0, 0, dtype=torch.float64)
     return {"surprisal": surprisal.numpy(), "hidden": hidden.numpy(), "tokens": tokens}

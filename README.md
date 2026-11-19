@@ -179,3 +179,24 @@ the best validation accuracy, then scores that checkpoint on the test split
   `stdp_lr` (0.01) times a Hebbian term built from batch-mean column activities, which are small, minus a weight decay;
   the mean |dw| per update is about 1e-4. It is kept for experiments, not claimed as a contributor.
 - Use mixed precision (`training.amp: true`) on CUDA devices.
+
+## Full-transcript GPT-2 features (P4b)
+
+The release lists content words only. `words --backend gpt2full` takes every word of
+each run from a forced-alignment TextGrid of the same audio (`audioNN.TextGrid` for run
+NN, word tier). GPT-2 reads the whole run so far, and each content word of the release
+keeps the features of the transcript word it aligns to (`semmn/eeg/transcript.py`; the
+log reports the alignment rate and onset agreement). Unaligned content words keep their
+onset with a neutral feature value, so the design is the same as in P4. In this mode,
+`distract` replaces only the window's content words, and the true function words stay
+in place as context. `--runs-now` splits the stage into calls of a few runs each.
+
+```bash
+python -I eeg_p3.py words --backend gpt2full --textgrids /path/to/textgrids
+LM="$SEMMN_BRODERICK/cache/lm_gpt2full_run_l6.npz"
+python -I eeg_p3.py distract --condition forward --subjects 1-19 --lm "$LM" --runs-now 16-17
+python -I eeg_p3.py distract --condition forward --subjects 1-19 --lm "$LM" --runs-now 18-20
+# ... same for reverse (--subjects 1-10), then encode as in P4 with
+# --distractors "$SEMMN_BRODERICK/cache/distractorsfull_<condition>_w10_k88_p0.9_l6.npz" --out outputs/eeg_p4b
+python -I eeg_p4.py --out outputs/eeg_p4b --p3 outputs/eeg
+```
