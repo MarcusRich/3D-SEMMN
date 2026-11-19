@@ -247,7 +247,7 @@ def plot_understanding_routes_2d(
     model: SEMMNModel, cfg: SEMMNConfig, device: torch.device, output_dir: Path
 ) -> None:
     """2D route maps of how visual/audio evidence traverses column graph."""
-    _, val_loader = build_dataloaders(cfg)
+    _, val_loader, _ = build_dataloaders(cfg)
     batch = next(iter(val_loader))
     vision, audio, label = batch
     vision = vision[:1].to(device)
@@ -408,7 +408,7 @@ def plot_understanding_routes_2d(
 def plot_manifold_trajectories(
     model: SEMMNModel, cfg: SEMMNConfig, device: torch.device, output_dir: Path
 ) -> None:
-    _, val_loader = build_dataloaders(cfg)
+    _, val_loader, _ = build_dataloaders(cfg)
     zs = []
     ys = []
     for bi, (vision, audio, label) in enumerate(val_loader):

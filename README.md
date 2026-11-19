@@ -4,8 +4,8 @@ Minimal but fully functional PyTorch 2.3+ prototype of a **3D Spatially-Embedded
 
 - fixed 3D neuron coordinates (`100 x 100 x 50` in `config/default.yaml`)
 - 100 columnar modules (dense intra-column, sparse inter-column)
-- exponential distance-penalized sparse connectivity (`torch.sparse`)
-- Hebbian/STDP update every 100 steps
+- exponential distance-penalized sparse connectivity (`torch.sparse`): `lambda_decay` is in column spacings and `inter_density` is the expected fraction of possible directed edges
+- Hebbian/STDP update every `connectivity.stdp_interval` optimizer steps (default 100; `eval-small.yaml` uses 10 so it fires within its 96-step budget)
 - shared perceptual manifold hub with cross-modal attention
 - manifold regularization (latent `d=8`) + geometric twist layer (Cayley rotation)
 - multimodal losses: classification + contrastive + reconstruction + imagination cycle
@@ -79,13 +79,21 @@ python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-sma
 - Ablations:
   - `loss.use_spatial_penalty: false`
   - `loss.use_manifold_loss: false`
+  - `connectivity.enabled: false` (inter-column lesion)
+  - `model.hub_modality_tokens: true` (encoder features as extra hub attention tokens; off by default)
+- Synthetic audio (`data`): a tone whose pitch encodes the digit, with per-sample pitch jitter
+  (`audio_pitch_jitter`) and white noise (`audio_snr_db`), so audio alone is informative but
+  does not determine the label
 
 ## Reported Metrics
 
-`train.py` logs:
+`train.py` holds out `data.val_size` samples of MNIST-train (fixed by
+`data.split_seed`) as the validation split. It keeps `best.pt` from the epoch with
+the best validation accuracy, then scores that checkpoint on the test split
+(MNIST-t10k) once. It logs:
 
 - classification loss and total loss
-- validation classification accuracy
+- validation classification accuracy, and the final test accuracy of `best.pt`
 - cross-modal retrieval accuracy (vision->audio nearest match in batch)
 - active sparse parameters (`nnz` proxy)
 - energy proxy (`mean(|w| * distance)`)
@@ -109,5 +117,5 @@ python eval_small.py --config config/eval-small.yaml   # writes outputs/eval-sma
 
 - Start with `config/light.yaml` to confirm setup and debug quickly.
 - Increase `training.batch_size` and `model.recurrent_steps` gradually.
-- Keep STDP interval at `100` to limit plasticity overhead.
+- STDP runs every `connectivity.stdp_interval` optimizer steps; check that a run is long enough for it to fire.
 - Use mixed precision (`training.amp: true`) on CUDA devices.

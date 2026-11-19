@@ -1,5 +1,20 @@
+# Local environments (a symlinked .venv is a file, not a directory)
+.venv
 .venv/
+venv/
+.env
+
+# Python bytecode and tool caches
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# OS and editor files
 .DS_Store
+._*
+.idea/
+.vscode/
+*.swp

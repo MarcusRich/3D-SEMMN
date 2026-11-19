@@ -14,9 +14,14 @@ class SharedManifoldHub(nn.Module):
         feature_dim: int,
         attention_heads: int = 4,
         direct_fusion: bool = False,
+        modality_tokens: bool = False,
     ) -> None:
         super().__init__()
         self.state_dim = state_dim
+        # When True, projected encoder features join the hub columns as two extra
+        # attention tokens, a second route from the encoders to the hub latent that
+        # skips the column grid. Off by default so the hub reads only its columns.
+        self.modality_tokens = modality_tokens
         # When True, encoder features are also added straight into the fused latent,
         # skipping the column grid. Off by default; kept only to reproduce old runs.
         self.direct_fusion = direct_fusion
@@ -61,10 +66,11 @@ class SharedManifoldHub(nn.Module):
         vision_features: torch.Tensor,
         audio_features: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        hub_states = states[:, hub_columns, :]
-        v_token = self.modality_proj(vision_features).unsqueeze(1)
-        a_token = self.modality_proj(audio_features).unsqueeze(1)
-        tokens = torch.cat([hub_states, v_token, a_token], dim=1)
+        tokens = states[:, hub_columns, :]
+        if self.modality_tokens:
+            v_token = self.modality_proj(vision_features).unsqueeze(1)
+            a_token = self.modality_proj(audio_features).unsqueeze(1)
+            tokens = torch.cat([tokens, v_token, a_token], dim=1)
 
         attn_out, attn_map = self.attn(tokens, tokens, tokens, need_weights=True)
         pooled = attn_out.mean(dim=1)
