@@ -88,12 +88,25 @@ class SparseInterColumnConnectivity(nn.Module):
 
     def sparse_matrix(self) -> torch.Tensor:
         indices = torch.stack([self.row_idx, self.col_idx], dim=0)
-        return torch.sparse_coo_tensor(
-            indices=indices,
-            values=self.edge_weights,
-            size=(self.num_columns, self.num_columns),
-            device=self.edge_weights.device,
-        ).coalesce()
+        # Opt into invariant checks. Recent torch warns, and then skips the checks,
+        # unless the caller chooses. The graph is small, so the check is cheap.
+        checker = getattr(torch.sparse, "check_sparse_tensor_invariants", None)
+        if checker is None:
+            built = torch.sparse_coo_tensor(
+                indices=indices,
+                values=self.edge_weights,
+                size=(self.num_columns, self.num_columns),
+                device=self.edge_weights.device,
+            )
+        else:
+            with checker():
+                built = torch.sparse_coo_tensor(
+                    indices=indices,
+                    values=self.edge_weights,
+                    size=(self.num_columns, self.num_columns),
+                    device=self.edge_weights.device,
+                )
+        return built.coalesce()
 
     def forward(self, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Apply sparse inter-column message passing.

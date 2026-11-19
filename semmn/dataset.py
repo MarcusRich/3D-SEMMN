@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import torch
@@ -166,16 +167,35 @@ def build_dataloaders(config: SEMMNConfig) -> tuple[DataLoader, DataLoader, Data
     Test is the source's test split (MNIST-t10k for the synthetic data).
     """
     root = "./data"
-    if config.training.dataset_source == "hf":
+    source = config.training.dataset_source
+    if source == "hf":
         try:
             pool = HuggingFaceAVMNIST(split="train")
             test_ds = HuggingFaceAVMNIST(split="test")
-        except Exception:
+        except Exception as exc:
+            if not config.training.allow_synthetic_fallback:
+                raise RuntimeError(
+                    "training.dataset_source is 'hf' but AV-MNIST could not be loaded "
+                    f"({type(exc).__name__}: {exc}). Refusing to train on synthetic audio "
+                    "instead. Set training.allow_synthetic_fallback: true to opt into that "
+                    "fallback. Loading the Hugging Face dataset contacts the hub."
+                ) from exc
+            warnings.warn(
+                "AV-MNIST failed to load; using synthetic audio because "
+                "training.allow_synthetic_fallback is true "
+                f"({type(exc).__name__}: {exc})",
+                stacklevel=2,
+            )
             pool = synthetic_avmnist(config, root, train=True)
             test_ds = synthetic_avmnist(config, root, train=False)
-    else:
+    elif source == "synthetic":
         pool = synthetic_avmnist(config, root, train=True)
         test_ds = synthetic_avmnist(config, root, train=False)
+    else:
+        raise ValueError(
+            "training.dataset_source must be 'synthetic' or 'hf'; "
+            f"got {source!r}"
+        )
     train_ds, val_ds = split_train_val(pool, config.data.val_size, config.data.split_seed)
 
     def loader(ds: Dataset, shuffle: bool, workers: int) -> DataLoader:

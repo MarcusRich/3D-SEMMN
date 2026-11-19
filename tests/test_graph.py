@@ -50,6 +50,20 @@ def test_hub_is_reachable_from_both_lobes_within_the_recurrent_steps(eval_config
         assert frac >= 0.9
 
 
+def test_intra_density_boost_does_not_change_sampled_edges() -> None:
+    # The field is loaded and ignored. Intra-column dynamics are dense factors.
+    centers = torch.tensor([[float(i), 0.0, 0.0] for i in range(8)])
+
+    def build(boost: float) -> SparseInterColumnConnectivity:
+        torch.manual_seed(0)
+        cfg = ConnectivityConfig(inter_density=0.3, intra_density_boost=boost)
+        return SparseInterColumnConnectivity(centers, 4, cfg)
+
+    low, high = build(1.0), build(50.0)
+    assert torch.equal(low.row_idx, high.row_idx)
+    assert torch.equal(low.col_idx, high.col_idx)
+
+
 def test_edge_count_matches_inter_density(eval_config) -> None:
     c = eval_config.n_columns
     expected = eval_config.connectivity.inter_density * c * (c - 1)

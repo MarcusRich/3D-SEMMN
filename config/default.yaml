@@ -18,7 +18,8 @@ model:
 connectivity:
   lambda_decay: 1.0  # in column spacings
   inter_density: 0.08
-  intra_density_boost: 2.0
+  # intra_density_boost is accepted and ignored. Intra-column dynamics are dense
+  # low-rank factors, not a sampled graph, so the value does not change the model.
   min_weight: 0.0
   max_weight: 1.5
   init_weight_scale: 0.15

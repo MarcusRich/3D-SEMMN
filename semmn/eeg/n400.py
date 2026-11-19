@@ -46,7 +46,10 @@ def window_mean(ep: np.ndarray, fs: float, tmin: float, win: tuple[float, float]
 def subject_slope(amplitude: np.ndarray, predictor: np.ndarray) -> float:
     """OLS slope of amplitude on the z-scored predictor (units of amplitude per SD)."""
     p = np.asarray(predictor, dtype=float)
-    z = (p - p.mean()) / p.std()
+    sd = float(p.std())
+    if not np.isfinite(sd) or sd == 0.0:
+        raise ValueError("predictor has no variance; the N400 slope is undefined")
+    z = (p - p.mean()) / sd
     return float(np.polyfit(z, np.asarray(amplitude, dtype=float), 1)[0])
 
 

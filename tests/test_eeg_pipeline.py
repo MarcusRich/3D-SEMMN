@@ -75,6 +75,8 @@ def test_pipeline_recovers_planted_envelope_response(tmp_path, with_embedding):
     summary = (out / "summary.md").read_text()
     assert "word-feature gain" in summary and "segment identification" in summary
     assert "N400 check" in summary and "each montage against 128 channels" in summary
+    assert "not the held-out runs" in summary
+    assert "not corrected for the number of montages" in summary
     with (out / "n400_trf_per_subject_forward.csv").open() as fh:
         n4 = list(csv.DictReader(fh))
     assert {r["feature"] for r in n4} == {"surprisal", "dissimilarity"} and len(n4) == 2 * 4 * 3

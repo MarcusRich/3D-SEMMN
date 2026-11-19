@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from semmn.eeg import n400
 
@@ -34,6 +35,11 @@ def test_epochs_drop_trials_off_the_ends():
     ep, keep = n400.epochs(x, np.array([5, 500, 995]), FS)
     np.testing.assert_array_equal(keep, [False, True, False])
     assert ep.shape == (1, 100, 2)
+
+
+def test_constant_predictor_has_no_slope():
+    with pytest.raises(ValueError, match="no variance"):
+        n400.subject_slope(np.arange(5, dtype=float), np.ones(5))
 
 
 def test_baseline_removes_offsets():

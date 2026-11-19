@@ -90,19 +90,34 @@ def _scalar(x) -> float:
     return float(np.asarray(x).reshape(-1)[0])
 
 
+def _as_time_by_channels(x: np.ndarray, n_channels: int, name: str) -> np.ndarray:
+    """Return ``x`` as ``(time, n_channels)``.
+
+    The channel count identifies the channel axis. Choosing the longer axis is wrong
+    for a recording shorter than the montage: a ``(40, 128)`` EEG would be read as
+    128 time points of 40 channels.
+    """
+    if x.ndim != 2:
+        raise ValueError(f"{name}: expected a 2-D array, got shape {tuple(x.shape)}")
+    time_major = x.shape[1] == n_channels
+    channel_major = x.shape[0] == n_channels
+    if time_major and channel_major:
+        raise ValueError(f"{name}: shape {tuple(x.shape)} is square, so the channel axis is ambiguous")
+    if time_major:
+        return x
+    if channel_major:
+        return np.ascontiguousarray(x.T)
+    raise ValueError(f"{name}: expected one axis of length {n_channels}, got shape {tuple(x.shape)}")
+
+
 def load_eeg_run(path: str | Path) -> tuple[np.ndarray, np.ndarray, float]:
     """Return (eeg (n x 128), mastoids (n x 2), fs) for one subject and run."""
     m = load_mat(path)
-    eeg = np.asarray(m[EEG_KEY], dtype=np.float64)
-    mast = np.asarray(m[MASTOID_KEY], dtype=np.float64)
-    if eeg.ndim != 2 or mast.ndim != 2:
-        raise ValueError(f"{Path(path).name}: expected 2-D eegData and mastoids")
-    if eeg.shape[0] < eeg.shape[1]:
-        eeg = eeg.T
-    if mast.shape[0] < mast.shape[1]:
-        mast = mast.T
+    name = Path(path).name
+    eeg = _as_time_by_channels(np.asarray(m[EEG_KEY], dtype=np.float64), N_CHANNELS, f"{name} eegData")
+    mast = _as_time_by_channels(np.asarray(m[MASTOID_KEY], dtype=np.float64), 2, f"{name} mastoids")
     if mast.shape[0] != eeg.shape[0]:
-        raise ValueError(f"{Path(path).name}: eegData and mastoids differ in length")
+        raise ValueError(f"{name}: eegData and mastoids differ in length")
     return eeg, mast, _scalar(m[FS_KEY])
 
 
