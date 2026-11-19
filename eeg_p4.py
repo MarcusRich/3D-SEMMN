@@ -209,7 +209,60 @@ def starter_section(cond: str, gains: dict, dec: list[dict], dis: list[dict]) ->
     return out
 
 
-def summarize(out_dir: Path, p3_dir: Path | None) -> Path:
+def subject_metrics(out_dir: Path, cond: str, montage: str) -> dict[str, dict[int, float]]:
+    """Per-subject values of the headline measures for one condition and montage."""
+    enc = read(out_dir / f"encoding_per_subject_{cond}.csv")
+    dec = read(out_dir / f"decoding_per_subject_{cond}.csv")
+    dis = read(out_dir / f"distractor_per_subject_{cond}.csv")
+    n4 = read(out_dir / f"n400_trf_per_subject_{cond}.csv")
+    r = {t: per_subject(enc, "mean_r", tier=t, montage=montage) for t in (A, B, S, E)}
+    out: dict[str, dict[int, float]] = {
+        "surprisal gain S − B (Δr)": {k: r[S][k] - r[B][k] for k in r[B]},
+        "all GPT-2 gain E − B (Δr)": {k: r[E][k] - r[B][k] for k in r[B]},
+        "N400 surprisal kernel 300–500 ms": per_subject(n4, "kernel_300_500ms", feature="surprisal", montage=montage),
+    }
+    for key in ("top10", "top1"):
+        a = per_subject(dec, key, window_s="10.0", montage=montage, tier=A)
+        e = per_subject(dec, key, window_s="10.0", montage=montage, tier=E)
+        out[f"segment ID {key}, E − A (points)"] = {k: 100 * (e[k] - a[k]) for k in a}
+    for t in (S, E):
+        for key in ("top10", "top1"):
+            real = per_subject(dis, key, montage=montage, tier=t)
+            sh = per_subject(dis, f"shuffled_{key}", montage=montage, tier=t)
+            out[f"distractor {key}, {t[:1]}: real − shuffled EEG (points)"] = {k: 100 * (real[k] - sh[k]) for k in real}
+        out[f"distractor top1, {t[:1]}: shuffled EEG (%)"] = {
+            k: 100 * v for k, v in per_subject(dis, "shuffled_top1", montage=montage, tier=t).items()}
+    rows = [x for x in dis if x["montage"] == montage]
+    if rows:
+        out["distractor top1: prior only (%)"] = {0: 100 * float(rows[0]["prior_top1"])}
+    return out
+
+
+def compare(new_dir: Path, old_dir: Path, new_name: str = "P4b", old_name: str = "P4") -> list[str]:
+    """Each headline measure in both runs (mean over subjects) and the paired difference."""
+    lines = [f"## {old_name} against {new_name} (same subjects, folds and windows; paired over subjects)", "",
+             f"{old_name}: GPT-2 on the content-word stream. {new_name}: GPT-2 on the full transcript, "
+             "features kept at the same content words; distractors keep the true function words as context.", "",
+             f"| condition | montage | measure | {old_name} | {new_name} | {new_name} − {old_name} [95% CI] | p |",
+             "| --- | --- | --- | --- | --- | --- | --- |"]
+    for cond in ("forward", "reverse"):
+        for m in ("biosemi128",) + STARTER:
+            old, new = subject_metrics(old_dir, cond, m), subject_metrics(new_dir, cond, m)
+            for key in new:
+                o, n = old.get(key, {}), new[key]
+                subs = sorted(set(o) & set(n))
+                if not subs:
+                    continue
+                d = np.array([n[k] - o[k] for k in subs])
+                fmt = "+.4f" if "Δr" in key or "kernel" in key else "+.1f"
+                p = f"{sstats.ttest_1samp(d, 0).pvalue:.2g}" if len(d) > 1 and d.std() > 0 else "n/a"
+                lines.append(f"| {cond} | {m} | {key} | {np.mean([o[k] for k in subs]):{fmt}} | "
+                             f"{np.mean([n[k] for k in subs]):{fmt}} | {ci(d, 1, fmt) if len(d) > 1 else 'n/a'} | {p} |")
+    lines.append("")
+    return lines
+
+
+def summarize(out_dir: Path, p3_dir: Path | None, compare_dir: Path | None = None) -> Path:
     lines = ["# P4 summary: GPT-2 word features (held-out subjects, held-out runs)", "",
              "GPT-2 small reads each run's content-word stream (the release has no function words), "
              "lower-cased, with a period at each sentence close, from the run's start only.", ""]
@@ -244,6 +297,8 @@ def summarize(out_dir: Path, p3_dir: Path | None) -> Path:
             w = sstats.ttest_ind(f, r, equal_var=False)
             lines.append(f"| {name} | {m} | {f.mean():+.4f} | {r.mean():+.4f} | {w.statistic:+.2f} | {w.pvalue:.2g} |")
         lines.append("")
+    if compare_dir is not None:
+        lines += compare(out_dir, compare_dir)
     path = out_dir / "summary_p4.md"
     path.write_text("\n".join(lines))
     return path
@@ -254,8 +309,9 @@ def main() -> None:
     here = Path(__file__).resolve().parent
     ap.add_argument("--out", type=Path, default=here / "outputs" / "eeg_p4")
     ap.add_argument("--p3", type=Path, default=here / "outputs" / "eeg", help="P3 tables, for the stand-in comparison")
+    ap.add_argument("--compare", type=Path, default=None, help="earlier P4 tables to compare against")
     a = ap.parse_args()
-    print(summarize(a.out, a.p3 if a.p3.exists() else None))
+    print(summarize(a.out, a.p3 if a.p3.exists() else None, a.compare))
 
 
 if __name__ == "__main__":
