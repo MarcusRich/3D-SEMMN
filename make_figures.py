@@ -1,8 +1,6 @@
 """Draw the README figures into docs/figures/.
 
-Every figure is simplified on purpose, the way a textbook picture is. Each one is badged
-Measured (drawn from this repository's results), Planned (the roadmap's brain mapping) or
-Illustration (a concept sketch), and the README says what each simplifies.
+Every figure is simplified on purpose, the way a textbook picture is.
 
     python make_figures.py                    # all figures
     python make_figures.py --only brain wiring
@@ -61,7 +59,6 @@ NETWORKS = {
 INK = "#1f2328"
 MUTED = "#6e7781"
 PANEL = "#ffffff"
-BADGE = {"Measured": "#1a7f37", "Planned": "#0969da", "Illustration": "#8250df"}
 
 plt.rcParams.update(
     {
@@ -81,20 +78,9 @@ plt.rcParams.update(
 # --------------------------------------------------------------------------- helpers
 
 
-def badge(fig, kind: str) -> None:
-    """Mark the figure Measured, Planned or Illustration; save() pins it to the drawing's top-right corner."""
-    fig._semmn_badge = kind
-
-
 def save(fig, name: str) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{name}.png"
-    kind = getattr(fig, "_semmn_badge", None)
-    if kind:
-        bb = fig.get_tightbbox(fig.canvas.get_renderer())  # inches, content only
-        w, h = fig.get_size_inches()
-        fig.text(bb.x1 / w, bb.y1 / h + 0.012, f"  {kind.upper()}  ", ha="right", va="bottom", fontsize=9,
-                 fontweight="bold", color="white", bbox=dict(boxstyle="round,pad=0.35", fc=BADGE[kind], ec="none"))
     fig.savefig(path, dpi=DPI, bbox_inches="tight", pad_inches=0.25)
     plt.close(fig)
     print(f"wrote {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)")
@@ -141,7 +127,6 @@ def scalp_xy(name: str) -> np.ndarray:
 
 def fig_big_idea() -> None:
     fig = plt.figure(figsize=(14, 3.9))
-    badge(fig, "Illustration")
     ax = fig.add_axes([0.01, 0.0, 0.98, 0.84])
     ax.set_xlim(0, 14)
     ax.set_ylim(0.1, 3.25)
@@ -242,7 +227,6 @@ def fig_brain(atlas) -> None:
     cmap = ListedColormap([NETWORKS[k][1] for k in keys])
 
     fig = plt.figure(figsize=(13, 7.4))
-    badge(fig, "Planned")
     views = [("left", "lateral", "Left side"), ("right", "lateral", "Right side"),
              ("left", "medial", "Left, inner face"), ("right", "medial", "Right, inner face")]
     for k, (hemi, view, name) in enumerate(views):
@@ -291,7 +275,6 @@ def fig_wiring(atlas) -> None:
     node_colors = [NETWORKS[n][1] for n in nets]
 
     fig = plt.figure(figsize=(13, 5.6))
-    badge(fig, "Planned")
     ax = fig.add_axes([0.0, 0.0, 1.0, 0.86])
     plotting.plot_connectome(adj, coords, node_color=node_colors, node_size=34, display_mode="lzr",
                              edge_kwargs={"color": "#57606a", "linewidth": 0.7, "alpha": 0.45},
@@ -317,7 +300,6 @@ def fig_electrodes(atlas) -> None:
     sizes = [26] * n_par + [70] * len(elec)
 
     fig = plt.figure(figsize=(13, 5.6))
-    badge(fig, "Illustration")
     ax = fig.add_axes([0.0, 0.0, 1.0, 0.86])
     plotting.plot_connectome(adj, all_nodes, node_color=colors, node_size=sizes, display_mode="lzr",
                              edge_cmap="Greys", edge_vmin=0, edge_vmax=0.8,
@@ -356,7 +338,6 @@ def fig_headset() -> None:
     gz[np.hypot(gx, gy) > 1.0] = np.nan
 
     fig = plt.figure(figsize=(13, 5.8))
-    badge(fig, "Measured")
     for k, (mname, label) in enumerate([("biosemi128", "Lab cap, 128 electrodes"),
                                          ("cyton_daisy16", "Starter headset, 16"),
                                          ("cyton8", "Starter headset, 8")]):
@@ -400,7 +381,6 @@ def fig_n400() -> None:
             for m, _ in order}
 
     fig = plt.figure(figsize=(13, 5.4))
-    badge(fig, "Measured")
     ax = fig.add_axes([0.06, 0.13, 0.42, 0.66])
     t = np.linspace(-0.1, 0.9, 400)
     expected = -0.15 * np.exp(-((t - 0.1) / 0.04) ** 2) + 0.3 * np.exp(-((t - 0.2) / 0.06) ** 2)
@@ -454,7 +434,6 @@ def fig_meaning_map() -> None:
     rank = surpr.argsort().argsort() / (len(surpr) - 1)  # colour by rank so the scale is even
 
     fig = plt.figure(figsize=(13, 6.2))
-    badge(fig, "Measured")
     ax = fig.add_axes([0.04, 0.06, 0.54, 0.78])
     from scipy.stats import gaussian_kde
 
@@ -490,7 +469,6 @@ def _summary_gain() -> dict[str, tuple[float, str]]:
 def fig_scoreboard() -> None:
     gain = _summary_gain()
     fig = plt.figure(figsize=(13, 5.6))
-    badge(fig, "Measured")
 
     ax = fig.add_axes([0.17, 0.2, 0.3, 0.56])
     order = [("biosemi128", "Lab cap 128"), ("cyton_daisy16", "Starter 16"), ("unicorn8", "Starter 8 (Unicorn)"),
