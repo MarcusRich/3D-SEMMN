@@ -487,18 +487,17 @@ def fig_scoreboard() -> None:
             transform=ax.transAxes, fontsize=9, color=MUTED, va="top")
 
     ax2 = fig.add_axes([0.66, 0.2, 0.3, 0.56])
-    rows = [("Simple baseline (MLP)", 0.919, "#57606a"), ("3D-SEMMN", 0.881, "#0969da"),
-            ("3D-SEMMN, wiring cut", 0.112, "#cf222e")]
-    ax2.barh(range(3), [r[1] for r in rows], color=[r[2] for r in rows], height=0.6)
+    rows = [("Simple baseline (MLP)", 0.919, "#57606a"), ("3D-SEMMN", 0.881, "#0969da")]
+    ax2.barh(range(len(rows)), [r[1] for r in rows], color=[r[2] for r in rows], height=0.5)
     for i, r in enumerate(rows):
         ax2.text(r[1] + 0.01, i, f"{r[1]:.0%}", va="center", fontsize=10)
-    ax2.set_yticks(range(3), [r[0] for r in rows])
+    ax2.set_yticks(range(len(rows)), [r[0] for r in rows])
     ax2.invert_yaxis()
     ax2.set_xlim(0, 1.12)
     ax2.set_xticks([])
     ax2.spines[["top", "right", "bottom"]].set_visible(False)
     ax2.set_title("Not yet: the brain-shaped model, on a toy digit task", fontsize=11, loc="left")
-    ax2.text(0, -0.14, "It nearly matches a plain network, and its wiring matters.\nIt hasn't been run on EEG yet.",
+    ax2.text(0, -0.14, "It nearly matches a plain network.\nIt hasn't been run on EEG yet.",
              transform=ax2.transAxes, fontsize=9, color=MUTED, va="top")
     save(fig, "08_scoreboard")
 
