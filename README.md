@@ -7,6 +7,8 @@ This repository is the research toward that goal. The pictures below explain it 
 
 ### Core Process
 
+Brain waves in, a few likely words out, and the person always has the final say.
+
 ![From EEG cap to brain waves, brain regions, model columns, a meaning map, word guesses and the person's yes](docs/figures/01_core_process.png)
 
 <sub>What's simplified: the real pipeline filters and times the signal at every step, and it weighs many candidates at once.</sub>
@@ -29,7 +31,7 @@ Columns talk to each other, and, as in a real brain, neighbours talk far more of
 
 ### What each electrode mostly hears
 
-A cheap headset has 8 to 16 electrodes. Each sits on the scalp above a handful of brain regions, so each one mostly hears those regions' columns.
+A cheap headset has 8 to 16 electrodes. Each sits on the scalp above a handful of brain regions, so each one mostly hears those regions' columns. Black dots are the headset's electrodes, and lines run to the three regions closest underneath each one.
 
 ![A 16-electrode headset with lines to the three closest brain regions under each electrode](docs/figures/04_electrodes_to_columns.png)
 
@@ -37,7 +39,7 @@ A cheap headset has 8 to 16 electrodes. Each sits on the scalp above a handful o
 
 ### What a headset can hear while someone listens to a story
 
-We used a public dataset of 19 people listening to an audiobook (Broderick et al., 2018). We then checked how well their brain waves followed the story's sound and words, on data the models had never seen. The strongest tracking is over the middle and sides of the head, and the cheap 8- and 16-electrode layouts sit right on it.
+We used a public dataset of 19 people listening to an audiobook (Broderick et al., 2018). We then checked how well their brain waves followed the story's sound and words, on data the models had never seen. The strongest tracking is over the middle and sides of the head, and the cheap 8- and 16-electrode layouts sit right on it. Warmer colours mean the brain waves there followed the story more closely.
 
 ![Three head maps, a 128-electrode lab cap and two starter headsets, warmest over the centre and sides](docs/figures/05_headset_map.png)
 
@@ -53,13 +55,15 @@ About 0.4 seconds after a word you didn't expect, the brain's response dips. Sci
 
 ### Words as points on a meaning map
 
-To a language model, a word's meaning is a long list of numbers. Words with similar meanings have similar lists, so they land near each other on a map. The model's job is to find a map like this inside the brain waves.
+To a language model, a word's meaning is a long list of numbers. Words with similar meanings have similar lists, so they land near each other on a map. Colour shows how surprising each word was in the story. The model's job is to find a map like this inside the brain waves, then ask the language model which nearby words fit.
 
 ![The story's words as dots on a 2D meaning map, coloured by how surprising each word was](docs/figures/07_meaning_map.png)
 
 <sub>What's simplified: 384 numbers per word are squeezed down to 2. That keeps the overall shape and loses the fine detail.</sub>
 
 ### Honest scoreboard
+
+What the research shows so far, and what it doesn't yet.
 
 ![Left: word knowledge improves brain-wave prediction on every headset. Right: the brain-shaped model nearly matches a plain network on a toy task](docs/figures/08_scoreboard.png)
 

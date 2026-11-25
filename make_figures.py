@@ -81,23 +81,21 @@ plt.rcParams.update(
 # --------------------------------------------------------------------------- helpers
 
 
-def badge(fig, kind: str, x: float = 0.985, y: float = 0.975) -> None:
-    fig.text(
-        x, y, f"  {kind.upper()}  ", ha="right", va="top", fontsize=9, fontweight="bold",
-        color="white", bbox=dict(boxstyle="round,pad=0.35", fc=BADGE[kind], ec="none"),
-    )
-
-
-def title(fig, text: str, sub: str | None = None) -> None:
-    fig.text(0.02, 0.975, text, ha="left", va="top", fontsize=17, fontweight="bold")
-    if sub:
-        fig.text(0.02, 0.915, sub, ha="left", va="top", fontsize=11, color=MUTED)
+def badge(fig, kind: str) -> None:
+    """Mark the figure Measured, Planned or Illustration; save() pins it to the drawing's top-right corner."""
+    fig._semmn_badge = kind
 
 
 def save(fig, name: str) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{name}.png"
-    fig.savefig(path, dpi=DPI)
+    kind = getattr(fig, "_semmn_badge", None)
+    if kind:
+        bb = fig.get_tightbbox(fig.canvas.get_renderer())  # inches, content only
+        w, h = fig.get_size_inches()
+        fig.text(bb.x1 / w, bb.y1 / h + 0.012, f"  {kind.upper()}  ", ha="right", va="bottom", fontsize=9,
+                 fontweight="bold", color="white", bbox=dict(boxstyle="round,pad=0.35", fc=BADGE[kind], ec="none"))
+    fig.savefig(path, dpi=DPI, bbox_inches="tight", pad_inches=0.25)
     plt.close(fig)
     print(f"wrote {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)")
 
@@ -143,7 +141,6 @@ def scalp_xy(name: str) -> np.ndarray:
 
 def fig_big_idea() -> None:
     fig = plt.figure(figsize=(14, 3.9))
-    title(fig, "Core Process", "Brain waves in, a few likely words out, and the person always has the final say.")
     badge(fig, "Illustration")
     ax = fig.add_axes([0.01, 0.0, 0.98, 0.84])
     ax.set_xlim(0, 14)
@@ -245,8 +242,6 @@ def fig_brain(atlas) -> None:
     cmap = ListedColormap([NETWORKS[k][1] for k in keys])
 
     fig = plt.figure(figsize=(13, 7.4))
-    title(fig, "Where the model's 100 columns live on the brain",
-          "Each coloured patch is one column. Colours group them into the brain's 7 big networks.")
     badge(fig, "Planned")
     views = [("left", "lateral", "Left side"), ("right", "lateral", "Right side"),
              ("left", "medial", "Left, inner face"), ("right", "medial", "Right, inner face")]
@@ -296,8 +291,6 @@ def fig_wiring(atlas) -> None:
     node_colors = [NETWORKS[n][1] for n in nets]
 
     fig = plt.figure(figsize=(13, 5.6))
-    title(fig, "How the columns are wired",
-          "Columns sit at the centre of their brain region. Neighbours connect far more often than distant pairs, like real cortex.")
     badge(fig, "Planned")
     ax = fig.add_axes([0.0, 0.0, 1.0, 0.86])
     plotting.plot_connectome(adj, coords, node_color=node_colors, node_size=34, display_mode="lzr",
@@ -324,8 +317,6 @@ def fig_electrodes(atlas) -> None:
     sizes = [26] * n_par + [70] * len(elec)
 
     fig = plt.figure(figsize=(13, 5.6))
-    title(fig, "What each electrode mostly hears",
-          "Black dots: a 16-electrode starter headset. Lines run to the 3 columns closest underneath each one.")
     badge(fig, "Illustration")
     ax = fig.add_axes([0.0, 0.0, 1.0, 0.86])
     plotting.plot_connectome(adj, all_nodes, node_color=colors, node_size=sizes, display_mode="lzr",
@@ -365,8 +356,6 @@ def fig_headset() -> None:
     gz[np.hypot(gx, gy) > 1.0] = np.nan
 
     fig = plt.figure(figsize=(13, 5.8))
-    title(fig, "What a headset can hear while someone listens to a story",
-          "Warmer = brain waves there followed the story's sound and words more closely (19 listeners, held-out data).")
     badge(fig, "Measured")
     for k, (mname, label) in enumerate([("biosemi128", "Lab cap, 128 electrodes"),
                                          ("cyton_daisy16", "Starter headset, 16"),
@@ -411,8 +400,6 @@ def fig_n400() -> None:
             for m, _ in order}
 
     fig = plt.figure(figsize=(13, 5.4))
-    title(fig, "Surprising words leave a dip in the brain waves",
-          "About 0.4 s after an unexpected word, the brain's response swings negative: the 'N400'. We find it even with 8 electrodes.")
     badge(fig, "Measured")
     ax = fig.add_axes([0.06, 0.13, 0.42, 0.66])
     t = np.linspace(-0.1, 0.9, 400)
@@ -467,8 +454,6 @@ def fig_meaning_map() -> None:
     rank = surpr.argsort().argsort() / (len(surpr) - 1)  # colour by rank so the scale is even
 
     fig = plt.figure(figsize=(13, 6.2))
-    title(fig, "Words as points on a meaning map",
-          "Each dot is a word from the story. Similar meanings land near each other; colour shows how surprising the word was.")
     badge(fig, "Measured")
     ax = fig.add_axes([0.04, 0.06, 0.54, 0.78])
     from scipy.stats import gaussian_kde
@@ -490,15 +475,6 @@ def fig_meaning_map() -> None:
     cb.set_ticks([])
     cax.text(0.5, 1.03, "surprising", transform=cax.transAxes, ha="center", fontsize=8.5, color=MUTED)
     cax.text(0.5, -0.06, "expected", transform=cax.transAxes, ha="center", va="top", fontsize=8.5, color=MUTED)
-    fig.text(0.68, 0.72, "Why this matters", fontsize=12, fontweight="bold")
-    fig.text(0.68, 0.42,
-             "A word's meaning is a list of 384 numbers.\n"
-             "Here they are squeezed to 2 so you can see\n"
-             "the shape. Shaded hills are where words crowd.\n\n"
-             "The model's job is to find a similar small\n"
-             "map inside the brain waves, then ask the\n"
-             "language model which nearby words fit.",
-             fontsize=10.5, color=INK, va="bottom", linespacing=1.5)
     save(fig, "07_meaning_map")
 
 
@@ -514,7 +490,6 @@ def _summary_gain() -> dict[str, tuple[float, str]]:
 def fig_scoreboard() -> None:
     gain = _summary_gain()
     fig = plt.figure(figsize=(13, 5.6))
-    title(fig, "Honest scoreboard", "What the research shows so far, and what it doesn't yet.")
     badge(fig, "Measured")
 
     ax = fig.add_axes([0.17, 0.2, 0.3, 0.56])
