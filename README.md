@@ -2,16 +2,9 @@
 
 **The goal:** give people who can't speak, starting with nonspeaking autistic people, a way to talk using a cheap EEG headset. Their brain waves go in, a language model suggests a few likely words, and nothing is said without their yes.
 
-This repository is the research toward that goal. The pictures below explain it without the math. Each one is simplified on purpose, the way a textbook diagram is, and says what it simplifies. The badge in each corner tells you what kind of picture it is:
-**MEASURED** comes from this repository's EEG results, **PLANNED** is the design we're building toward, and **ILLUSTRATION** is a concept sketch.
-
 ### Core Process
 
-Brain waves in, a few likely words out, and the person always has the final say.
-
 ![From EEG cap to brain waves, brain regions, model columns, a meaning map, word guesses and the person's yes](docs/figures/01_core_process.png)
-
-<sub>What's simplified: the real pipeline filters and times the signal at every step, and it weighs many candidates at once.</sub>
 
 ### Where the model's columns live on the brain
 
@@ -19,15 +12,11 @@ The model is built from 100 small units called columns. The plan is to give each
 
 ![100 brain regions on an inflated brain, coloured by network](docs/figures/02_columns_on_brain.png)
 
-<sub>What's simplified: today's model still lays its columns on a flat 10 × 10 grid. This is the mapping it is moving to (see the roadmap). The brain is "inflated" so the folds don't hide anything.</sub>
-
 ### How the columns are wired
 
 Columns talk to each other, and, as in a real brain, neighbours talk far more often than distant pairs. This is the model's wiring rule drawn on the brain.
 
 ![Columns as dots at the centre of each brain region, with mostly short connections](docs/figures/03_column_wiring.png)
-
-<sub>What's simplified: the wiring shown is one random draw from the rule (closer regions are more likely to connect), and distances are straight lines rather than paths along the cortex.</sub>
 
 ### What each electrode mostly hears
 
@@ -35,15 +24,11 @@ A cheap headset has 8 to 16 electrodes. Each sits on the scalp above a handful o
 
 ![A 16-electrode headset with lines to the three closest brain regions under each electrode](docs/figures/04_electrodes_to_columns.png)
 
-<sub>What's simplified: in reality every electrode hears the whole brain a little, blurred through the skull. This shows only the strongest share, and it places the electrodes on a template head rather than a measured one. That blur is also why a cheap headset can only tell us about large areas, not single regions.</sub>
-
 ### What a headset can hear while someone listens to a story
 
 We used a public dataset of 19 people listening to an audiobook (Broderick et al., 2018). We then checked how well their brain waves followed the story's sound and words, on data the models had never seen. The strongest tracking is over the middle and sides of the head, and the cheap 8- and 16-electrode layouts sit right on it. Warmer colours mean the brain waves there followed the story more closely.
 
 ![Three head maps, a 128-electrode lab cap and two starter headsets, warmest over the centre and sides](docs/figures/05_headset_map.png)
-
-<sub>What's simplified: colours are averaged per scalp region and smoothed between electrodes. The starter headsets are simulated by keeping only those electrodes from the lab cap, so this is an upper bound on what a real cheap headset records.</sub>
 
 ### Surprising words leave a dip in the brain waves
 
@@ -51,25 +36,17 @@ About 0.4 seconds after a word you didn't expect, the brain's response dips. Sci
 
 ![A textbook N400 curve next to measured dips per listener for four headsets](docs/figures/06_words_in_brainwaves.png)
 
-<sub>What's simplified: the curve on the left is a textbook sketch, not our recording. The dots on the right are measured, one per listener, averaged over thousands of words.</sub>
-
 ### Words as points on a meaning map
 
 To a language model, a word's meaning is a long list of numbers. Words with similar meanings have similar lists, so they land near each other on a map. Colour shows how surprising each word was in the story. The model's job is to find a map like this inside the brain waves, then ask the language model which nearby words fit.
 
 ![The story's words as dots on a 2D meaning map, coloured by how surprising each word was](docs/figures/07_meaning_map.png)
 
-<sub>What's simplified: 384 numbers per word are squeezed down to 2. That keeps the overall shape and loses the fine detail.</sub>
-
 ### Honest scoreboard
 
 What the research shows so far, and what it doesn't yet.
 
 ![Left: word knowledge improves brain-wave prediction on every headset. Right: the brain-shaped model nearly matches a plain network on a toy task](docs/figures/08_scoreboard.png)
-
-<sub>What's simplified: the effects on the left are small in absolute terms. The right-hand task is a toy (digits seen and heard), not language, and the brain-shaped model has not been run on EEG yet.</sub>
-
-All figures are drawn by `make_figures.py` from this repository's results and public atlases (`pip install -r requirements-figures.txt`, then `python make_figures.py`).
 
 ---
 
