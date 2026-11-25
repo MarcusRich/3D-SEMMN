@@ -143,7 +143,7 @@ def scalp_xy(name: str) -> np.ndarray:
 
 def fig_big_idea() -> None:
     fig = plt.figure(figsize=(14, 3.9))
-    title(fig, "The big idea", "Brain waves in, a few likely words out, and the person always has the final say.")
+    title(fig, "Core Process", "Brain waves in, a few likely words out, and the person always has the final say.")
     badge(fig, "Illustration")
     ax = fig.add_axes([0.01, 0.0, 0.98, 0.84])
     ax.set_xlim(0, 14)
@@ -164,7 +164,7 @@ def fig_big_idea() -> None:
     for i, (x, (head, sub)) in enumerate(zip(xs, steps)):
         ax.add_patch(FancyBboxPatch((x - 0.8, 1.15), 1.6, 1.95, boxstyle="round,pad=0.05,rounding_size=0.25",
                                     fc="#f6f8fa", ec="#d0d7de", lw=1.2))
-        cx, cy = x, 2.35
+        cx, cy = x, 2.13
         if i == 0:  # head with electrodes
             ax.add_patch(Circle((cx, cy), 0.48, fc="#ffe8d6", ec=INK, lw=1.2))
             ax.add_patch(Polygon([[cx - 0.08, cy + 0.47], [cx, cy + 0.6], [cx + 0.08, cy + 0.47]], fc="#ffe8d6", ec=INK))
@@ -209,7 +209,7 @@ def fig_big_idea() -> None:
         if i < len(steps) - 1:
             ax.add_patch(FancyArrowPatch((x + 0.84, 2.1), (xs[i + 1] - 0.84, 2.1), arrowstyle="-|>",
                                          mutation_scale=14, color=MUTED, lw=1.3))
-    save(fig, "01_big_idea")
+    save(fig, "01_core_process")
 
 
 def _majority_smooth(labels: np.ndarray, faces: np.ndarray, n_labels: int, rounds: int) -> np.ndarray:

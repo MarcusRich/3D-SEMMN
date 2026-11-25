@@ -5,9 +5,9 @@
 This repository is the research toward that goal. The pictures below explain it without the math. Each one is simplified on purpose, the way a textbook diagram is, and says what it simplifies. The badge in each corner tells you what kind of picture it is:
 **MEASURED** comes from this repository's EEG results, **PLANNED** is the design we're building toward, and **ILLUSTRATION** is a concept sketch.
 
-### The big idea
+### Core Process
 
-![From EEG cap to brain waves, brain regions, model columns, a meaning map, word guesses and the person's yes](docs/figures/01_big_idea.png)
+![From EEG cap to brain waves, brain regions, model columns, a meaning map, word guesses and the person's yes](docs/figures/01_core_process.png)
 
 <sub>What's simplified: the real pipeline filters and times the signal at every step, and it weighs many candidates at once.</sub>
 
