@@ -499,7 +499,7 @@ def fig_scoreboard() -> None:
     ax2.set_title("Not yet: the brain-shaped model, on a toy digit task", fontsize=11, loc="left")
     ax2.text(0, -0.14, "It nearly matches a plain network.\nIt hasn't been run on EEG yet.",
              transform=ax2.transAxes, fontsize=9, color=MUTED, va="top")
-    save(fig, "08_scoreboard")
+    save(fig, "08_results_so_far")
 
 
 FIGURES = {

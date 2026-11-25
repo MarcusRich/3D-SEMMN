@@ -44,7 +44,7 @@ To a language model, a word's meaning is a long list of numbers. Words with simi
 
 ### Results So Far
 
-![Left: word knowledge improves brain-wave prediction on every headset. Right: the brain-shaped model nearly matches a plain network on a toy task](docs/figures/08_scoreboard.png)
+![Left: word knowledge improves brain-wave prediction on every headset. Right: the brain-shaped model nearly matches a plain network on a toy task](docs/figures/08_results_so_far.png)
 
 ---
 
