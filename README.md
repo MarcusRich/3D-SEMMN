@@ -1,5 +1,55 @@
 # 3D-SEMMN (Prototype)
 
+**The goal:** give people who can't speak, starting with nonspeaking autistic people, a way to talk using a cheap EEG headset. Their brain waves go in, a language model suggests a few likely words, and nothing is said without their yes.
+
+### Core Process
+
+![From EEG cap to brain waves, brain regions, model columns, a meaning map, word guesses and the person's yes](docs/figures/01_core_process.png)
+
+### Columns on the Brain
+
+The model is built from 100 small units called columns. The plan is to give each one a real home: one region of the brain from a standard atlas (Schaefer 2018, 100 regions). The colours show which of the brain's seven big networks each region belongs to.
+
+![100 brain regions on an inflated brain, coloured by network](docs/figures/02_columns_on_brain.png)
+
+### Column Wiring
+
+Columns talk to each other, and, as in a real brain, neighbours talk far more often than distant pairs. This is the model's wiring rule drawn on the brain.
+
+![Columns as dots at the centre of each brain region, with mostly short connections](docs/figures/03_column_wiring.png)
+
+### Electrode Coverage
+
+A cheap headset has 8 to 16 electrodes. Each sits on the scalp above a handful of brain regions, so each one mostly hears those regions' columns. Black dots are the headset's electrodes, and lines run to the three regions closest underneath each one.
+
+![A 16-electrode headset with lines to the three closest brain regions under each electrode](docs/figures/04_electrodes_to_columns.png)
+
+### Headset Signal Map
+
+We used a public dataset of 19 people listening to an audiobook (Broderick et al., 2018). We then checked how well their brain waves followed the story's sound and words, on data the models had never seen. The strongest tracking is over the middle and sides of the head, and the cheap 8- and 16-electrode layouts sit right on it. Warmer colours mean the brain waves there followed the story more closely.
+
+![Three head maps, a 128-electrode lab cap and two starter headsets, warmest over the centre and sides](docs/figures/05_headset_map.png)
+
+### Word Surprise in Brain Waves
+
+About 0.4 seconds after a word you didn't expect, the brain's response dips. Scientists call this the N400. We find it in 16 of 19 listeners, even with only 8 electrodes. This is the kind of signal that lets brain waves check a language model's guesses.
+
+![A textbook N400 curve next to measured dips per listener for four headsets](docs/figures/06_words_in_brainwaves.png)
+
+### Meaning Map
+
+To a language model, a word's meaning is a long list of numbers. Words with similar meanings have similar lists, so they land near each other on a map. Colour shows how surprising each word was in the story. The model's job is to find a map like this inside the brain waves, then ask the language model which nearby words fit.
+
+![The story's words as dots on a 2D meaning map, coloured by how surprising each word was](docs/figures/07_meaning_map.png)
+
+### Results So Far
+
+![Left: word knowledge improves brain-wave prediction on every headset. Right: the brain-shaped model nearly matches a plain network on a toy task](docs/figures/08_results_so_far.png)
+
+---
+
+## Technical overview
+
 Minimal but fully functional PyTorch 2.3+ prototype of a **3D Spatially-Embedded Multimodal Manifold Network** with:
 
 - fixed 3D neuron coordinates (`100 x 100 x 50` in `config/default.yaml`)

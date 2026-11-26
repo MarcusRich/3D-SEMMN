@@ -24,3 +24,4 @@ __pycache__/
 # connectivity fix (a handful of edges, validation accuracy 0) and is not a result.
 *.pt
 outputs/history.json
+.venv-fig/
